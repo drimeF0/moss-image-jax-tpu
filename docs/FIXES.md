@@ -139,6 +139,17 @@ N = H/16·W/16; последовательность `[image, text]`; image-upst
   `notebooks/colab_tpu.ipynb`. Не инициализировать JAX в ячейках ноутбука —
   только через `!python`.
 
+### FIXES #16. Precision на TPU: HIGHEST только для fp32
+- `lax.Precision.HIGHEST` обязателен для fp32-матумов на TPU (иначе они
+  эмулируются на bf16), но для bf16 его запрашивать нельзя: Mosaic падает
+  `INTERNAL ... online-softmax: Bad lhs type` при `tpu.matmul` с
+  `contract_precision<fp32>` (bf16×bf16→f32) в фьюжене внимания (v5e).
+- Правило порта: `precision = HIGHEST if dtype == fp32 else DEFAULT` — в
+  `model.linear/attention`, `quant.weight_only_linear`, `text_encoder._linear`
+  и attention. bf16 MXU и так аккумулирует в fp32; VAE (fp32) остаётся на HIGHEST.
+- Регрессионный тест: bf16-шаг обучения на tiny-модели + проверка выбора precision.
+
+
 
 
 

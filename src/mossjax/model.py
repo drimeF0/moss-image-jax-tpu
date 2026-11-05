@@ -10,6 +10,10 @@ from .config import MOSS_IMAGE_CONFIG, MossConfig
 PRECISION = lax.Precision.HIGHEST
 
 
+def _precision_for(*dtypes):
+    return PRECISION if any(getattr(dtype, "dtype", dtype) == jnp.float32 for dtype in dtypes) else lax.Precision.DEFAULT
+
+
 def weight_dtype(weight):
     if isinstance(weight, dict):
         return weight["act_dtype"].dtype
@@ -21,7 +25,7 @@ def linear(x, weight, bias=None):
         if bias is not None:
             raise ValueError("quantized linear layers carry their own bias")
         return quant.weight_only_linear(x, weight)
-    y = jnp.einsum("...i,oi->...o", x, weight, precision=PRECISION)
+    y = jnp.einsum("...i,oi->...o", x, weight, precision=_precision_for(x, weight))
     if bias is not None:
         y = y + bias
     return y
@@ -84,12 +88,12 @@ def attention(q, k, v, key_mask=None):
     kh = jnp.transpose(k, (0, 2, 1, 3))
     vh = jnp.transpose(v, (0, 2, 1, 3))
     scale = 1.0 / math.sqrt(head_dim)
-    scores = jnp.einsum("bhqd,bhkd->bhqk", qh, kh, precision=PRECISION) * scale
+    scores = jnp.einsum("bhqd,bhkd->bhqk", qh, kh, precision=_precision_for(q, k)) * scale
     if key_mask is not None:
         bias = jnp.where(key_mask[:, None, None, :], jnp.zeros((), scores.dtype), jnp.full((), -jnp.inf, scores.dtype))
         scores = scores + bias
     probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(v.dtype)
-    out = jnp.einsum("bhqk,bhkd->bhqd", probs, vh, precision=PRECISION)
+    out = jnp.einsum("bhqk,bhkd->bhqd", probs, vh, precision=_precision_for(probs, v))
     return jnp.transpose(out, (0, 2, 1, 3)).reshape(batch, length, heads * head_dim)
 
 

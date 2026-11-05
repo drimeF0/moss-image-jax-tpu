@@ -189,3 +189,30 @@ def test_adafactor_relative_step_runs():
 def test_make_optimizer_rejects_unknown():
     with np.testing.assert_raises(ValueError):
         trainer.make_optimizer(trainer.TrainConfig(optimizer="sgd"))
+
+
+def test_bf16_precision_selection():
+    from jax import lax
+
+    assert jm._precision_for(jnp.float32) == lax.Precision.HIGHEST
+    assert jm._precision_for(jnp.bfloat16) == lax.Precision.DEFAULT
+    assert jm._precision_for(jnp.zeros((2,), jnp.float32)) == lax.Precision.HIGHEST
+    assert jm._precision_for(jnp.zeros((2,), jnp.bfloat16)) == lax.Precision.DEFAULT
+    from mossjax import quant
+
+    assert quant.matmul_precision(jnp.float32) == lax.Precision.HIGHEST
+    assert quant.matmul_precision(jnp.bfloat16) == lax.Precision.DEFAULT
+
+
+def test_bf16_training_step_runs():
+    params = jax.tree.map(
+        lambda leaf: leaf.astype(jnp.bfloat16) if jnp.issubdtype(leaf.dtype, jnp.floating) else leaf,
+        _params(_torch_model()),
+    )
+    config = trainer.TrainConfig(rank=2, learning_rate=1e-2, remat=True)
+    state, optimizer = trainer.init_train_state(params, CFG, config, jax.random.PRNGKey(9))
+    step = trainer.make_train_step(CFG, config, optimizer)
+    batch = _batch(seed=7)
+    for _ in range(2):
+        state, metrics = step(state, params, *batch)
+    assert np.isfinite(float(metrics["loss"]))

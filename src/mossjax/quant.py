@@ -64,9 +64,13 @@ def quantize_linear_layer(weight, bias=None):
     return layer
 
 
+def matmul_precision(dtype):
+    return PRECISION if dtype == jnp.float32 else lax.Precision.DEFAULT
+
+
 def weight_only_linear(x, layer):
     weight = dequantize_weight(layer["int8"], layer["scale"]).astype(layer["act_dtype"].dtype)
-    y = jnp.einsum("...i,oi->...o", x.astype(weight.dtype), weight, precision=PRECISION)
+    y = jnp.einsum("...i,oi->...o", x.astype(weight.dtype), weight, precision=matmul_precision(weight.dtype))
     if "bias" in layer:
         y = y + layer["bias"]
     return y

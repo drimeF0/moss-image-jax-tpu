@@ -86,7 +86,8 @@ def config_from_hf(config_dict: Dict) -> TextConfig:
 def _linear(x, weight):
     if isinstance(weight, dict):
         return quant.weight_only_linear(x, weight)
-    return jnp.einsum("...i,oi->...o", x, weight, precision=PRECISION)
+    precision = PRECISION if weight.dtype == jnp.float32 else lax.Precision.DEFAULT
+    return jnp.einsum("...i,oi->...o", x, weight, precision=precision)
 
 
 def embedding_lookup(params, input_ids):
@@ -173,10 +174,11 @@ def full_attention(x, params, cos, sin, cfg: TextConfig):
     v = repeat_kv(v, cfg.num_key_value_groups)
 
     scaling = cfg.head_dim**-0.5
-    scores = jnp.einsum("bhld,bhkd->bhlk", q, k, precision=PRECISION) * scaling
+    precision = PRECISION if q.dtype == jnp.float32 else lax.Precision.DEFAULT
+    scores = jnp.einsum("bhld,bhkd->bhlk", q, k, precision=precision) * scaling
     scores = scores + causal_bias(length, scores.dtype)
     probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(q.dtype)
-    out = jnp.einsum("bhlk,bhkd->bhld", probs, v, precision=PRECISION)
+    out = jnp.einsum("bhlk,bhkd->bhld", probs, v, precision=precision)
     out = jnp.transpose(out, (0, 2, 1, 3)).reshape(batch, length, cfg.num_attention_heads * cfg.head_dim)
     out = out * jax.nn.sigmoid(gate)
     return _linear(out, params["o_proj"]["weight"])
