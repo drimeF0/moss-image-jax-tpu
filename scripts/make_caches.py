@@ -62,9 +62,7 @@ def main():
             "tests", "reference", "kohya_sd_scripts", "configs", "moss_image_qwen35_9b", "config.json",
         )
     te_cfg = te_mod.load_config(config_path)
-    te_params = te_mod.load_params([args.text_encoder], te_cfg)
-    if args.int8_te:
-        te_params = quant.quantize_text_encoder_params(te_params)
+    te_params = te_mod.load_params([args.text_encoder], te_cfg, quantize_int8=args.int8_te)
 
     from transformers import AutoTokenizer
 
@@ -72,29 +70,20 @@ def main():
     with open(args.prompts, "r", encoding="utf-8") as handle:
         prompts = json.load(handle)
 
-    manager = buckets.BucketManager(False, tuple(args.max_resolution), 256, max(args.max_resolution), args.bucket_steps)
-    manager.make_buckets()
-    uncond_ids = tokenize(tokenizer, "")
-
-    for name, captions in prompts.items():
-        image_path = os.path.join(args.images_dir, name)
-        image = Image.open(image_path).convert("RGB")
-        reso, resized_size, _ = manager.select_bucket(*image.size)
-        image = image.resize(resized_size, Image.LANCZOS)
-        width, height = resized_size
-        pixels = np.asarray(image, dtype=np.float32) / 127.5 - 1.0
-        pixels = pixels.transpose(2, 0, 1)
-
-        stem = os.path.splitext(os.path.join(args.output_dir, name))[0]
-        latents_path = stem + f"_{width:04d}x{height:04d}_moss.npz"
-        caching.write_latents_cache(latents_path, vae_params, vae_cfg, pixels, original_size=[width, height])
-
-        te_path = stem + "_moss_te.npz"
-        caption_ids = [tokenize(tokenizer, caption) for caption in captions]
-        caching.write_te_cache(
-            te_path, te_params, te_cfg, caption_ids, captions, uncond_ids, caption_dropout_rate=args.caption_dropout_rate
-        )
-        print(f"cached {name}: bucket {reso}, {len(captions)} caption(s)")
+    cached = caching.build_caches_from_images(
+        args.images_dir,
+        prompts,
+        vae_params,
+        vae_cfg,
+        te_params,
+        te_cfg,
+        tokenizer,
+        args.output_dir,
+        max_resolution=tuple(args.max_resolution),
+        bucket_steps=args.bucket_steps,
+        caption_dropout_rate=args.caption_dropout_rate,
+    )
+    print(f"cached {len(cached)} images into {args.output_dir}")
 
 
 if __name__ == "__main__":

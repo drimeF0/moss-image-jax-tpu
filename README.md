@@ -24,6 +24,21 @@
 - Дальше: стриминг весов TE для 16 ГБ, .toml-датасет, валидация/сэмплинг, прогон на Colab v5e-1.
 - Ссылочный torch-код зафиксирован в `tests/reference/kohya_sd_scripts/`.
 
+## Быстрый старт
+
+Colab/Kaggle TPU (один TPU-процесс на сессию): ноутбук
+[`notebooks/colab_tpu.ipynb`](notebooks/colab_tpu.ipynb) — сначала smoke-тест
+без скачивания весов, затем реальный прогон:
+
+```bash
+python scripts/colab_run.py --mode smoke --output-dir /content/moss_out/smoke
+python scripts/colab_run.py --mode full --dit ... --vae ... --text-encoder ... \
+    --tokenizer ... --images-dir ... --prompts prompts.json --output-dir ... --int8
+```
+
+Отдельные стадии: `scripts/make_caches.py`, `scripts/train.py`
+(AdamW/Adafactor, `--dataset-config dataset.toml`), `scripts/sample.py`.
+
 ## Тесты
 
 ```bash

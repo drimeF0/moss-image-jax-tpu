@@ -4,6 +4,7 @@ from typing import Dict, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import lax
 
 from . import quant
@@ -282,9 +283,84 @@ def forward(params, input_ids, cfg: TextConfig, position_ids=None):
     return rms_norm_zero_centered(x, params["norm"]["weight"], cfg.rms_norm_eps)
 
 
-def state_dict_to_params(sd: Dict, cfg: TextConfig):
-    flat = {key: jnp.asarray(value) for key, value in sd.items()}
-    return weights_mod.unflatten_flat(flat, TE_LIST_CONTAINERS)
+def param_shapes(cfg: TextConfig):
+    shapes = {
+        "embed_tokens.weight": (cfg.vocab_size, cfg.hidden_size),
+        "norm.weight": (cfg.hidden_size,),
+    }
+    for index in range(cfg.num_hidden_layers):
+        prefix = f"layers.{index}."
+        shapes[prefix + "input_layernorm.weight"] = (cfg.hidden_size,)
+        shapes[prefix + "post_attention_layernorm.weight"] = (cfg.hidden_size,)
+        shapes[prefix + "mlp.gate_proj.weight"] = (cfg.intermediate_size, cfg.hidden_size)
+        shapes[prefix + "mlp.up_proj.weight"] = (cfg.intermediate_size, cfg.hidden_size)
+        shapes[prefix + "mlp.down_proj.weight"] = (cfg.hidden_size, cfg.intermediate_size)
+        if cfg.layer_types[index] == "full_attention":
+            shapes[prefix + "self_attn.q_proj.weight"] = (cfg.num_attention_heads * cfg.head_dim * 2, cfg.hidden_size)
+            shapes[prefix + "self_attn.k_proj.weight"] = (cfg.num_key_value_heads * cfg.head_dim, cfg.hidden_size)
+            shapes[prefix + "self_attn.v_proj.weight"] = (cfg.num_key_value_heads * cfg.head_dim, cfg.hidden_size)
+            shapes[prefix + "self_attn.o_proj.weight"] = (cfg.hidden_size, cfg.num_attention_heads * cfg.head_dim)
+            shapes[prefix + "self_attn.q_norm.weight"] = (cfg.head_dim,)
+            shapes[prefix + "self_attn.k_norm.weight"] = (cfg.head_dim,)
+        else:
+            shapes[prefix + "linear_attn.in_proj_qkv.weight"] = (2 * cfg.key_dim + cfg.value_dim, cfg.hidden_size)
+            shapes[prefix + "linear_attn.in_proj_z.weight"] = (cfg.value_dim, cfg.hidden_size)
+            shapes[prefix + "linear_attn.in_proj_b.weight"] = (cfg.linear_num_value_heads, cfg.hidden_size)
+            shapes[prefix + "linear_attn.in_proj_a.weight"] = (cfg.linear_num_value_heads, cfg.hidden_size)
+            shapes[prefix + "linear_attn.out_proj.weight"] = (cfg.hidden_size, cfg.value_dim)
+            shapes[prefix + "linear_attn.conv1d.weight"] = (cfg.conv_dim, 1, cfg.linear_conv_kernel_dim)
+            shapes[prefix + "linear_attn.dt_bias"] = (cfg.linear_num_value_heads,)
+            shapes[prefix + "linear_attn.A_log"] = (cfg.linear_num_value_heads,)
+            shapes[prefix + "linear_attn.norm.weight"] = (cfg.linear_value_head_dim,)
+    return shapes
+
+
+TE_QUANT_SUFFIXES = (
+    "self_attn.q_proj.weight",
+    "self_attn.k_proj.weight",
+    "self_attn.v_proj.weight",
+    "self_attn.o_proj.weight",
+    "linear_attn.in_proj_qkv.weight",
+    "linear_attn.in_proj_z.weight",
+    "linear_attn.out_proj.weight",
+    "mlp.gate_proj.weight",
+    "mlp.up_proj.weight",
+    "mlp.down_proj.weight",
+    "embed_tokens.weight",
+)
+
+
+def _is_quant_target(key: str) -> bool:
+    return key.endswith(TE_QUANT_SUFFIXES)
+
+
+def state_dict_to_params(sd: Dict, cfg: TextConfig, strict: bool = False, quantize: bool = False):
+    expected = param_shapes(cfg)
+    flat = {}
+    for key, value in sd.items():
+        if key not in expected:
+            if "rotary_emb." in key:
+                continue
+            if strict:
+                raise ValueError(f"unexpected text encoder key: {key}")
+            continue
+        shape = value["int8"].shape if isinstance(value, dict) else np.asarray(value).shape
+        if tuple(shape) != tuple(expected[key]):
+            raise ValueError(f"shape mismatch for {key}: {shape} != {expected[key]}")
+        flat[key] = value
+    missing = sorted(set(expected) - set(flat))
+    if missing:
+        raise ValueError(f"missing text encoder keys: {missing[:10]}")
+
+    converted = {}
+    for key, value in flat.items():
+        if quantize and isinstance(value, np.ndarray) and _is_quant_target(key):
+            converted[key] = quant.leaf_from_host(quant.host_layer(value))
+        elif isinstance(value, dict):
+            converted[key] = quant.leaf_from_host(value)
+        else:
+            converted[key] = jnp.asarray(value)
+    return weights_mod.unflatten_flat(converted, TE_LIST_CONTAINERS)
 
 
 def load_config(path: str) -> TextConfig:
@@ -321,8 +397,8 @@ def load_state_dict_from_safetensors(paths):
     return sd
 
 
-def load_params(paths, cfg: TextConfig, dtype=None):
-    params = state_dict_to_params(load_state_dict_from_safetensors(paths), cfg)
+def load_params(paths, cfg: TextConfig, dtype=None, quantize_int8: bool = False):
+    params = state_dict_to_params(load_state_dict_from_safetensors(paths), cfg, quantize=quantize_int8)
     if dtype is not None:
         params = weights_mod.cast_tree(params, dtype)
     return params

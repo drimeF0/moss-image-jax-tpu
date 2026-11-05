@@ -205,12 +205,14 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
   `text_encoder.load_params` (skip vision/lm_head), `vae.load_vae_params`.
 - Осталось: orbax/resume, лог по upstream-формату, `.toml`-датасет,
   валидационный цикл в train_loop, прогон на реальных весах v5e-1.
-### Ф8. TPU v5e-1 и приёмка
-- Smoke на реальном чекпойнте int8; memory_analysis бюджета; attention:
-  explicit/splash для S до 8192.
-- Бенч: first step vs steady, ms/step, tokens/s; отчёт в docs/.
-- Colab-ноутбук с одним TPU-процессом (Colab-правила: инициализация TPU
-  только в раннере).
+### Ф8. TPU v5e-1 и приёмка (частично: раннер/ноутбук/хост-int8)
+- `scripts/colab_run.py`: единый процесс для Colab/Kaggle TPU (smoke/full,
+  summary.json, стадии кэш → train → sample, освобождение параметров между
+  стадиями); `notebooks/colab_tpu.ipynb` (smoke без скачиваний → реальный прогон).
+- int8-загрузка на хосте (`load_params(quantize_int8=True)`): пик HBM — только
+  int8-дерево.
+- Осталось: smoke на реальном чекпойнте v5e-1, memory_analysis, splash для
+  длинных S, бенчи first/steady, стриминг TE, финальный отчёт.
 
 ## 6. Чек-лист приёмки
 

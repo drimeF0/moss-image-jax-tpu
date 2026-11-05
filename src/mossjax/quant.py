@@ -1,14 +1,42 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import lax
 
 PRECISION = lax.Precision.HIGHEST
 INT8_MAX = 127.0
+INV_INT8_MAX = np.float32(1.0) / np.float32(INT8_MAX)
+
+
+def quantize_weight_host(weight):
+    array = np.asarray(weight, dtype=np.float32)
+    scale = np.maximum(np.max(np.abs(array), axis=1), np.float32(1e-8)) * INV_INT8_MAX
+    quantized = np.clip(np.round(array / scale[:, None]), -INT8_MAX, INT8_MAX).astype(np.int8)
+    return quantized, scale.astype(np.float32)
+
+
+def host_layer(weight):
+    quantized, scale = quantize_weight_host(weight)
+    return {
+        "int8": quantized,
+        "scale": scale,
+        "act_dtype": np.zeros((), dtype=np.asarray(weight).dtype),
+    }
+
+
+def leaf_from_host(value):
+    act = value.get("act_dtype")
+    act_dtype = jnp.asarray(act).dtype if act is not None else jnp.float32
+    return {
+        "int8": jnp.asarray(value["int8"]),
+        "scale": jnp.asarray(value["scale"]),
+        "act_dtype": jnp.zeros((), dtype=act_dtype),
+    }
 
 
 def per_output_channel_scale(weight, eps=1e-8):
     weight = weight.astype(jnp.float32)
-    return jnp.maximum(jnp.max(jnp.abs(weight), axis=1), eps) / INT8_MAX
+    return jnp.maximum(jnp.max(jnp.abs(weight), axis=1), jnp.asarray(eps, jnp.float32)) * jnp.asarray(INV_INT8_MAX)
 
 
 def quantize_weight(weight):

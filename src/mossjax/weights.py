@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from . import quant
 from .config import MossConfig
 
 DIT_KEY_PREFIXES = ("model.diffusion_model.", "diffusion_model.")
@@ -143,7 +144,21 @@ def param_shapes(cfg: MossConfig):
     return shapes
 
 
-def state_dict_to_params(sd: Dict[str, np.ndarray], cfg: MossConfig):
+def _is_quant_target(key: str) -> bool:
+    if not key.endswith(".weight"):
+        return False
+    parts = key.split(".")
+    return len(parts) == 5 and parts[0] == "layers" and parts[2] == "proj" and parts[3] in (
+        "q",
+        "k",
+        "v",
+        "o",
+        "ffn_up_gate",
+        "ffn_down",
+    )
+
+
+def state_dict_to_params(sd: Dict[str, np.ndarray], cfg: MossConfig, quantize: bool = False):
     expected = param_shapes(cfg)
     flat = {}
     for key, tensor in sd.items():
@@ -156,9 +171,9 @@ def state_dict_to_params(sd: Dict[str, np.ndarray], cfg: MossConfig):
             if array.shape[0] != 3 * cfg.dim:
                 raise ValueError(f"fused qkv tensor has shape {array.shape}, expected first dim {3 * cfg.dim}")
             for new_key, part in zip(split, np.split(array, 3, axis=0)):
-                flat[new_key] = jnp.asarray(np.ascontiguousarray(part))
+                flat[new_key] = np.ascontiguousarray(part)
             continue
-        flat[key] = jnp.asarray(np.asarray(tensor))
+        flat[key] = tensor if isinstance(tensor, dict) else np.asarray(tensor)
 
     missing = sorted(set(expected) - set(flat))
     unexpected = sorted(set(flat) - set(expected))
@@ -166,10 +181,19 @@ def state_dict_to_params(sd: Dict[str, np.ndarray], cfg: MossConfig):
         raise ValueError(f"missing keys in state dict: {missing[:10]}")
     if unexpected:
         raise ValueError(f"unexpected keys in state dict: {unexpected[:10]}")
-    for key, shape in expected.items():
-        if tuple(flat[key].shape) != tuple(shape):
-            raise ValueError(f"shape mismatch for {key}: {flat[key].shape} != {shape}")
-    return unflatten_flat(flat)
+
+    converted = {}
+    for key, value in flat.items():
+        shape = value["int8"].shape if isinstance(value, dict) else value.shape
+        if tuple(shape) != tuple(expected[key]):
+            raise ValueError(f"shape mismatch for {key}: {shape} != {expected[key]}")
+        if quantize and isinstance(value, np.ndarray) and _is_quant_target(key):
+            converted[key] = quant.leaf_from_host(quant.host_layer(value))
+        elif isinstance(value, dict):
+            converted[key] = quant.leaf_from_host(value)
+        else:
+            converted[key] = jnp.asarray(value)
+    return unflatten_flat(converted)
 
 
 def params_to_state_dict(params) -> Dict[str, np.ndarray]:
@@ -181,7 +205,9 @@ def tree_dtypes(params):
 
 
 def cast_tree(params, dtype):
-    return jax.tree.map(lambda leaf: leaf.astype(dtype), params)
+    return jax.tree.map(
+        lambda leaf: leaf.astype(dtype) if jnp.issubdtype(leaf.dtype, jnp.floating) else leaf, params
+    )
 
 
 def load_state_dict_from_safetensors(paths, disable_mmap: bool = False):
@@ -197,8 +223,8 @@ def load_state_dict_from_safetensors(paths, disable_mmap: bool = False):
     return sd
 
 
-def load_params(paths, cfg: MossConfig, dtype=None):
-    params = state_dict_to_params(load_state_dict_from_safetensors(paths), cfg)
+def load_params(paths, cfg: MossConfig, dtype=None, quantize_int8: bool = False):
+    params = state_dict_to_params(load_state_dict_from_safetensors(paths), cfg, quantize=quantize_int8)
     if dtype is not None:
         params = cast_tree(params, dtype)
     return params

@@ -126,6 +126,20 @@ N = H/16·W/16; последовательность `[image, text]`; image-upst
   `min_dim_size_to_factor=128`. Естественный масштаб lr у Adafactor другой
   (для tiny-тестов ~0.02 против AdamW ~0.05); clip-by-global-norm общий.
 
+### FIXES #15. int8-загрузка на хосте и Colab-раннер
+- `load_params(..., quantize_int8=True)` (DiT и TE) квантует веса в numpy ДО
+  переноса на устройство: пик HBM на v5e-1 — только int8-дерево (DiT ~5 ГБ,
+  TE ~9 ГБ), а не bf16+int8 одновременно. Схема квантования та же
+  (per-output-channel, RNE, scale fp32 [out]).
+- На точных полуцелых границах host- и device-квантование могут разойтись на
+  1 уровень int8 (XLA-округление); обучение всегда идёт через host-путь,
+  тест допускает ≤0.1% таких элементов.
+- `scripts/colab_run.py` — единый TPU-процесс: стадии smoke/full, ошибки
+  пишутся в `summary.json` без потери предыдущих стадий. Ноутбук:
+  `notebooks/colab_tpu.ipynb`. Не инициализировать JAX в ячейках ноутбука —
+  только через `!python`.
+
+
 
 
 

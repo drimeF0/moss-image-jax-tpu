@@ -7,6 +7,17 @@ from . import text_encoder as text_encoder_mod
 from . import vae as vae_mod
 from .data import cache as cache_mod
 
+MAX_TOKEN_LENGTH = 4096
+
+
+def format_prompt(prompt: str) -> str:
+    return f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n thinking\n"
+
+
+def tokenize_prompt(tokenizer, prompt: str, max_length: int = MAX_TOKEN_LENGTH) -> np.ndarray:
+    ids = tokenizer(format_prompt(prompt))["input_ids"]
+    return np.asarray(ids[:max_length], dtype=np.int64)
+
 
 def encode_prompt_embeds(params, cfg, input_ids_list: Sequence[np.ndarray]) -> List[np.ndarray]:
     outputs = []
@@ -44,3 +55,54 @@ def write_latents_cache(path, params, cfg, pixels: np.ndarray, original_size: Op
         crop_ltrb=[0, 0, original[0], original[1]],
     )
     return latents
+
+
+def build_caches_from_images(
+    images_dir: str,
+    prompts: dict,
+    vae_params,
+    vae_cfg,
+    te_params,
+    te_cfg,
+    tokenizer,
+    output_dir: str,
+    max_resolution=(1024, 1024),
+    bucket_steps: int = 64,
+    caption_dropout_rate: float = 0.0,
+    max_samples: Optional[int] = None,
+):
+    import os
+
+    from PIL import Image
+
+    from .data import buckets
+
+    os.makedirs(output_dir, exist_ok=True)
+    manager = buckets.BucketManager(False, tuple(max_resolution), 256, max(max_resolution), bucket_steps)
+    manager.make_buckets()
+    uncond_ids = tokenize_prompt(tokenizer, "")
+    cached = []
+    for name, captions in prompts.items():
+        image_path = os.path.join(images_dir, name)
+        image = Image.open(image_path).convert("RGB")
+        reso, resized_size, _ = manager.select_bucket(*image.size)
+        image = image.resize(resized_size, Image.LANCZOS)
+        width, height = resized_size
+        pixels = np.asarray(image, dtype=np.float32) / 127.5 - 1.0
+        pixels = pixels.transpose(2, 0, 1)
+
+        stem = os.path.splitext(os.path.join(output_dir, name))[0]
+        parent = os.path.dirname(stem)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        latents_path = stem + f"_{width:04d}x{height:04d}_moss.npz"
+        write_latents_cache(latents_path, vae_params, vae_cfg, pixels, original_size=[width, height])
+        te_path = stem + "_moss_te.npz"
+        caption_ids = [tokenize_prompt(tokenizer, caption) for caption in captions]
+        write_te_cache(
+            te_path, te_params, te_cfg, caption_ids, captions, uncond_ids, caption_dropout_rate=caption_dropout_rate
+        )
+        cached.append(name)
+        if max_samples is not None and len(cached) >= max_samples:
+            break
+    return cached
