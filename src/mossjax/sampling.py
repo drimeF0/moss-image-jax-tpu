@@ -1,5 +1,7 @@
+import time
 from typing import Optional, Sequence
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -32,6 +34,15 @@ def euler_step(latents, model_pred, sigmas, step_index):
     return latents + dt * model_pred
 
 
+def _make_predict(cfg, skip_layers, remat):
+    def predict(params, lora, x, timesteps, context, mask):
+        return model_mod.forward(
+            params, x, timesteps, context, mask, cfg, skip_layers=skip_layers, lora=lora, remat=remat
+        )
+
+    return jax.jit(predict)
+
+
 def generate_latents(
     params,
     cfg,
@@ -50,6 +61,8 @@ def generate_latents(
     lora=None,
     remat: bool = False,
     rng: Optional[np.random.Generator] = None,
+    progress: bool = True,
+    log_every: int = 1,
 ):
     height = max(16, height - height % 16)
     width = max(16, width - width % 16)
@@ -68,21 +81,36 @@ def generate_latents(
         negative_embeds = jnp.asarray(negative_embeds, dtype=jnp.float32)
         negative_mask = jnp.asarray(negative_mask, dtype=jnp.int32)
 
+    positive_predict = _make_predict(cfg, (), remat)
+    negative_predict = _make_predict(cfg, tuple(uncond_skip_layers), remat) if do_cfg else None
+
     sigmas = sampling_sigmas(steps, flow_shift)
-    for index in range(len(sigmas) - 1):
+    num_steps = len(sigmas) - 1
+    started = time.time()
+    if progress:
+        print(
+            f"[sample] denoising {num_steps} steps at {width}x{height} "
+            f"(first step includes XLA compilation)",
+            flush=True,
+        )
+    for index in range(num_steps):
         timestep = jnp.asarray([sigmas[index] * NUM_TRAIN_TIMESTEPS], dtype=jnp.float32)
         x = jnp.asarray(latents, dtype=jnp.float32)
         prediction = np.asarray(
-            model_mod.forward(params, x, timestep, prompt_embeds, prompt_mask, cfg, lora=lora, remat=remat),
-            dtype=np.float32,
+            positive_predict(params, lora, x, timestep, prompt_embeds, prompt_mask), dtype=np.float32
         )
         if do_cfg:
             uncond = np.asarray(
-                model_mod.forward(
-                    params, x, timestep, negative_embeds, negative_mask, cfg, skip_layers=uncond_skip_layers, lora=lora, remat=remat
-                ),
-                dtype=np.float32,
+                negative_predict(params, lora, x, timestep, negative_embeds, negative_mask), dtype=np.float32
             )
             prediction = uncond + guidance_scale * (prediction - uncond)
         latents = euler_step(latents, prediction, sigmas, index)
+        if progress and ((index + 1) % max(log_every, 1) == 0 or index == num_steps - 1):
+            elapsed = time.time() - started
+            eta = elapsed / (index + 1) * (num_steps - index - 1)
+            print(
+                f"[sample] step {index + 1}/{num_steps} sigma={float(sigmas[index]):.4f} "
+                f"elapsed {elapsed:.1f}s eta {eta:.1f}s",
+                flush=True,
+            )
     return latents

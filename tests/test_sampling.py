@@ -101,3 +101,21 @@ def test_generate_latents_with_injected_initial_latents():
         params, CFG, prompt, mask, height=32, width=32, steps=4, guidance_scale=1.0, initial_latents=initial, remat=False
     )
     assert np.isfinite(out).all()
+
+
+def test_generate_latents_progress(capsys):
+    params = _params(_torch_model())
+    prompt = np.zeros((1, 4, CFG.text_dim), dtype=np.float32)
+    mask = np.ones((1, 4), dtype=np.int32)
+    sampling.generate_latents(
+        params, CFG, prompt, mask, height=32, width=32, steps=3, guidance_scale=1.0, seed=0
+    )
+    out = capsys.readouterr().out
+    assert "[sample] denoising" in out
+    assert "[sample] step 3/3" in out
+    assert "eta" in out
+
+    sampling.generate_latents(
+        params, CFG, prompt, mask, height=32, width=32, steps=2, guidance_scale=1.0, seed=0, progress=False
+    )
+    assert capsys.readouterr().out == ""

@@ -19,10 +19,17 @@ def tokenize_prompt(tokenizer, prompt: str, max_length: int = MAX_TOKEN_LENGTH) 
     return np.asarray(ids[:max_length], dtype=np.int64)
 
 
-def encode_prompt_embeds(params, cfg, input_ids_list: Sequence[np.ndarray]) -> List[np.ndarray]:
+def encode_prompt_embeds(params, cfg, input_ids_list: Sequence[np.ndarray], jit: bool = True) -> List[np.ndarray]:
+    if jit:
+        import jax
+
+        forward = jax.jit(lambda model_params, ids: text_encoder_mod.forward(model_params, ids, cfg))
+    else:
+        forward = lambda model_params, ids: text_encoder_mod.forward(model_params, ids, cfg)
+
     outputs = []
     for input_ids in input_ids_list:
-        hidden = text_encoder_mod.forward(params, jnp.asarray(np.asarray(input_ids)), cfg)
+        hidden = forward(params, jnp.asarray(np.asarray(input_ids)))
         outputs.append(np.asarray(hidden[0], dtype=np.float32))
     return outputs
 

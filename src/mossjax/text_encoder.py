@@ -424,11 +424,53 @@ def load_state_dict_from_safetensors(paths):
 
 
 def load_params(paths, cfg: TextConfig, dtype=None, quantize_int8: bool = False):
+    from safetensors import safe_open
+
+    if isinstance(paths, str):
+        paths = [paths]
     metadata = weights_mod.read_safetensors_metadata(paths)
     act_dtype = quant.dtype_from_name(metadata.get(quant.META_ACT_DTYPE)) if metadata else None
-    params = state_dict_to_params(
-        load_state_dict_from_safetensors(paths), cfg, quantize=quantize_int8, act_dtype=act_dtype
-    )
+    expected = param_shapes(cfg)
+
+    prepared_scales = {}
+    for path in paths:
+        with safe_open(str(path), framework="np") as handle:
+            for raw_key in handle.keys():
+                if raw_key.endswith(".scale"):
+                    stripped = strip_text_encoder_key(raw_key[: -len(".scale")])
+                    if stripped is not None:
+                        prepared_scales[stripped] = handle.get_tensor(raw_key)
+
+    flat = {}
+    for path in paths:
+        with safe_open(str(path), framework="np") as handle:
+            for raw_key in handle.keys():
+                if raw_key.endswith(".scale"):
+                    continue
+                key = strip_text_encoder_key(raw_key)
+                if key is None or key not in expected:
+                    continue
+                array = np.asarray(handle.get_tensor(raw_key))
+                if tuple(array.shape) != tuple(expected[key]):
+                    raise ValueError(f"shape mismatch for {key}: {array.shape} != {expected[key]}")
+                scale = prepared_scales.get(key)
+                if scale is not None and array.dtype == np.int8:
+                    flat[key] = {
+                        "int8": jnp.asarray(array),
+                        "scale": jnp.asarray(scale),
+                        "act_dtype": jnp.zeros((), dtype=act_dtype if act_dtype is not None else jnp.float32),
+                    }
+                elif quantize_int8 and is_quant_target(key):
+                    flat[key] = quant.leaf_from_host(quant.host_layer(array))
+                else:
+                    flat[key] = jnp.asarray(array)
+                del array
+
+    missing = sorted(set(expected) - set(flat))
+    if missing:
+        raise ValueError(f"missing text encoder keys: {missing[:10]}")
+
+    params = weights_mod.unflatten_flat(flat, TE_LIST_CONTAINERS)
     if dtype is not None:
         params = weights_mod.cast_tree(params, dtype)
     return params

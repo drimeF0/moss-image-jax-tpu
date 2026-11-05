@@ -253,12 +253,69 @@ def read_safetensors_metadata(paths):
     return metadata
 
 
+def _convert_leaf(key, array, prepared_scale, quantize, act_dtype):
+    if prepared_scale is not None:
+        return {
+            "int8": jnp.asarray(array),
+            "scale": jnp.asarray(prepared_scale),
+            "act_dtype": jnp.zeros((), dtype=act_dtype if act_dtype is not None else np.float32),
+        }
+    if quantize and is_quant_target(key):
+        return quant.leaf_from_host(quant.host_layer(array))
+    return jnp.asarray(array)
+
+
 def load_params(paths, cfg: MossConfig, dtype=None, quantize_int8: bool = False):
+    from safetensors import safe_open
+
+    if isinstance(paths, str):
+        paths = [paths]
     metadata = read_safetensors_metadata(paths)
     act_dtype = quant.dtype_from_name(metadata.get(quant.META_ACT_DTYPE)) if metadata else None
-    params = state_dict_to_params(
-        load_state_dict_from_safetensors(paths), cfg, quantize=quantize_int8, act_dtype=act_dtype
-    )
+    expected = param_shapes(cfg)
+
+    prepared_scales = {}
+    for path in paths:
+        with safe_open(str(path), framework="np") as handle:
+            for raw_key in handle.keys():
+                if raw_key.endswith(".scale"):
+                    prepared_scales[strip_dit_prefix(raw_key[: -len(".scale")])] = handle.get_tensor(raw_key)
+
+    flat = {}
+    for path in paths:
+        with safe_open(str(path), framework="np") as handle:
+            for raw_key in handle.keys():
+                if raw_key.endswith(".scale"):
+                    continue
+                key = strip_dit_prefix(raw_key)
+                if key in DERIVED_KEYS:
+                    continue
+                split = split_fused_qkv(key, cfg.dim)
+                if split is not None:
+                    array = np.asarray(handle.get_tensor(raw_key))
+                    if array.shape[0] != 3 * cfg.dim:
+                        raise ValueError(f"fused qkv tensor has shape {array.shape}, expected first dim {3 * cfg.dim}")
+                    for new_key, part in zip(split, np.split(array, 3, axis=0)):
+                        part = np.ascontiguousarray(part)
+                        flat[new_key] = _convert_leaf(new_key, part, prepared_scales.get(new_key), quantize_int8, act_dtype)
+                    del array
+                    continue
+                array = np.asarray(handle.get_tensor(raw_key))
+                flat[key] = _convert_leaf(key, array, prepared_scales.get(key), quantize_int8, act_dtype)
+                del array
+
+    missing = sorted(set(expected) - set(flat))
+    unexpected = sorted(set(flat) - set(expected))
+    if missing:
+        raise ValueError(f"missing keys in state dict: {missing[:10]}")
+    if unexpected:
+        raise ValueError(f"unexpected keys in state dict: {unexpected[:10]}")
+    for key, value in flat.items():
+        shape = value["int8"].shape if isinstance(value, dict) else value.shape
+        if tuple(shape) != tuple(expected[key]):
+            raise ValueError(f"shape mismatch for {key}: {shape} != {expected[key]}")
+
+    params = unflatten_flat(flat)
     if dtype is not None:
         params = cast_tree(params, dtype)
     return params

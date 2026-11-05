@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--steps", type=int, default=None, help="training steps (smoke default 6, full default 200)")
-    parser.add_argument("--sample-steps", type=int, default=4)
+    parser.add_argument("--sample-steps", type=int, default=None, help="denoising steps (smoke default 4, full default 50)")
     parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--optimizer", default="adamw", choices=["adamw", "adafactor"])
@@ -132,6 +132,8 @@ def run_smoke(args, output_dir, summary):
 
     records = cache_mod.find_cache_pairs(cache_dir)
     steps = args.steps if args.steps is not None else 6
+    sample_steps = args.sample_steps if args.sample_steps is not None else 4
+    print(f"[stage] smoke: {len(records)} cached samples, {steps} training steps", flush=True)
     train_config = trainer.TrainConfig(
         rank=args.rank, learning_rate=args.learning_rate or 0.05, optimizer=args.optimizer, remat=True
     )
@@ -148,6 +150,7 @@ def run_smoke(args, output_dir, summary):
     )
     summary["training"] = {"steps": steps, "first_loss": history[0], "last_loss": history[-1]}
 
+    print(f"[stage] smoke: sampling {sample_steps} steps", flush=True)
     latents = sampling.generate_latents(
         dit_params,
         smoke.SMOKE_DIT,
@@ -155,7 +158,7 @@ def run_smoke(args, output_dir, summary):
         np.ones((1, 4), np.int32),
         height=size,
         width=size,
-        steps=args.sample_steps,
+        steps=sample_steps,
         guidance_scale=1.0,
         seed=args.seed,
     )
@@ -181,29 +184,48 @@ def run_full(args, output_dir, summary):
     te_cfg = te_mod.load_config(te_cfg_path)
 
     cache_dir = args.cache_dir or os.path.join(output_dir, "cache")
-    if not args.no_cache:
+    need_cache = not args.no_cache
+    need_sample = not args.skip_sample
+    sample_steps = args.sample_steps if args.sample_steps is not None else 50
+
+    print("[stage] vae: loading", flush=True)
+    vae_started = time.time()
+    vae_params, vae_cfg = vae_mod.load_vae_params(weights.load_state_dict_from_safetensors([args.vae]))
+    print(f"[stage] vae: loaded in {time.time() - vae_started:.1f}s", flush=True)
+
+    prompt_embeds = prompt_mask = negative_embeds = negative_mask = None
+    if need_cache or need_sample:
+        print("[stage] text encoder: loading (caches and/or sample prompt)", flush=True)
+        te_started = time.time()
         te_params = te_mod.load_params(resolve_shards(args.text_encoder), te_cfg, quantize_int8=args.int8)
-        vae_params, vae_cfg = vae_mod.load_vae_params(weights.load_state_dict_from_safetensors([args.vae]))
-        if not args.images_dir or not args.prompts:
-            raise SystemExit("--images-dir and --prompts are required to build caches (or pass --no-cache)")
-        with open(args.prompts, "r", encoding="utf-8") as handle:
-            prompts = json.load(handle)
-        cached = caching.build_caches_from_images(
-            args.images_dir,
-            prompts,
-            vae_params,
-            vae_cfg,
-            te_params,
-            te_cfg,
-            tokenizer,
-            cache_dir,
-            max_samples=args.max_samples,
-        )
-        summary["cache"] = {"samples": len(cached), "dir": cache_dir}
-        del te_params
-        free()
-    else:
-        vae_params, vae_cfg = vae_mod.load_vae_params(weights.load_state_dict_from_safetensors([args.vae]))
+        print(f"[stage] text encoder: loaded in {time.time() - te_started:.1f}s", flush=True)
+        try:
+            if need_cache:
+                if not args.images_dir or not args.prompts:
+                    raise SystemExit("--images-dir and --prompts are required to build caches (or pass --no-cache)")
+                with open(args.prompts, "r", encoding="utf-8") as handle:
+                    prompts = json.load(handle)
+                print(f"[stage] cache: {args.images_dir} -> {cache_dir}", flush=True)
+                cached = caching.build_caches_from_images(
+                    args.images_dir,
+                    prompts,
+                    vae_params,
+                    vae_cfg,
+                    te_params,
+                    te_cfg,
+                    tokenizer,
+                    cache_dir,
+                    max_samples=args.max_samples,
+                )
+                summary["cache"] = {"samples": len(cached), "dir": cache_dir}
+            if need_sample:
+                print("[stage] sample: encoding the prompt", flush=True)
+                prompt_embeds, prompt_mask, negative_embeds, negative_mask = make_prompt_embeds(
+                    te_params, te_cfg, tokenizer, args.sample_prompt
+                )
+        finally:
+            del te_params
+            free()
 
     if args.dataset_config:
         from mossjax.data import build_records, load_dataset_config
@@ -214,8 +236,12 @@ def run_full(args, output_dir, summary):
     if not records:
         raise SystemExit(f"no cache pairs found in {cache_dir}")
 
+    print(f"[stage] train: {len(records)} samples, loading DiT", flush=True)
+    dit_started = time.time()
     dit_params = weights.load_params(resolve_shards(args.dit), MOSS_IMAGE_CONFIG, quantize_int8=args.int8)
+    print(f"[stage] train: DiT loaded in {time.time() - dit_started:.1f}s", flush=True)
     steps = args.steps if args.steps is not None else 200
+    print(f"[stage] train: {steps} steps", flush=True)
     train_config = trainer.TrainConfig(
         rank=args.rank,
         learning_rate=args.learning_rate or 1e-4,
@@ -236,17 +262,9 @@ def run_full(args, output_dir, summary):
         vae_stats=vae_stats_from(vae_params),
     )
     summary["training"] = {"steps": steps, "first_loss": history[0], "last_loss": history[-1]}
-    del dit_params
-    free()
 
-    if not args.skip_sample:
-        te_params = te_mod.load_params(resolve_shards(args.text_encoder), te_cfg, quantize_int8=args.int8)
-        prompt_embeds, prompt_mask, negative_embeds, negative_mask = make_prompt_embeds(
-            te_params, te_cfg, tokenizer, args.sample_prompt
-        )
-        del te_params
-        free()
-        dit_params = weights.load_params(resolve_shards(args.dit), MOSS_IMAGE_CONFIG, quantize_int8=args.int8)
+    if need_sample:
+        print("[stage] sample: denoising (DiT kept from training)", flush=True)
         latents = sampling.generate_latents(
             dit_params,
             MOSS_IMAGE_CONFIG,
@@ -256,12 +274,15 @@ def run_full(args, output_dir, summary):
             negative_mask,
             height=args.height,
             width=args.width,
-            steps=50,
+            steps=sample_steps,
             guidance_scale=3.0,
             flow_shift=5.0,
             uncond_skip_layers=(22,),
             seed=args.seed,
         )
+        del dit_params
+        free()
+        print("[stage] sample: decoding with VAE", flush=True)
         pixels = np.asarray(vae_mod.decode_from_dit(vae_params, latents, vae_cfg), dtype=np.float32)[0]
         pixels = np.clip((pixels.transpose(1, 2, 0) + 1.0) * 127.5, 0, 255).astype(np.uint8)
         from PIL import Image
