@@ -206,6 +206,7 @@ def run_full(args, output_dir, summary):
                 with open(args.prompts, "r", encoding="utf-8") as handle:
                     prompts = json.load(handle)
                 print(f"[stage] cache: {args.images_dir} -> {cache_dir}", flush=True)
+                cache_resolution = None if args.dataset_config else (args.width, args.height)
                 cached = caching.build_caches_from_images(
                     args.images_dir,
                     prompts,
@@ -216,6 +217,7 @@ def run_full(args, output_dir, summary):
                     tokenizer,
                     cache_dir,
                     max_samples=args.max_samples,
+                    resolution=cache_resolution,
                 )
                 summary["cache"] = {"samples": len(cached), "dir": cache_dir}
             if need_sample:

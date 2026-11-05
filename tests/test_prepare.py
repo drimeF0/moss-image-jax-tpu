@@ -228,3 +228,52 @@ def test_te_load_resolves_first_shard(tmp_path):
     first = _split_shards(sd, tmp_path, "model")
     loaded = jte.load_params(str(first), TE_CFG)
     _assert_trees_equal(loaded, _te_params(model))
+
+
+def test_encode_prompt_embeds_bucketed_padding_matches_unpadded():
+    from mossjax import caching
+
+    model = _te_torch_model()
+    params = _te_params(model)
+    ids = (np.arange(10) % (model.config.vocab_size - 2) + 1).astype(np.int64)
+
+    padded = caching.encode_prompt_embeds(params, TE_CFG, [ids], jit=True)[0]
+    eager = caching.encode_prompt_embeds(params, TE_CFG, [ids], jit=False)[0]
+    assert padded.shape == (10, model.config.hidden_size)
+    np.testing.assert_allclose(padded, eager, rtol=1e-4, atol=1e-5)
+
+
+def test_build_caches_uses_fixed_resolution_and_original_size(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from mossjax import caching
+
+    captured = {}
+
+    def fake_latents(path, *args, **kwargs):
+        captured["latents_path"] = path
+        captured["original_size"] = kwargs.get("original_size")
+
+    monkeypatch.setattr(caching, "write_latents_cache", fake_latents)
+    monkeypatch.setattr(caching, "write_te_cache", lambda *args, **kwargs: None)
+
+    class Tokenizer:
+        def __call__(self, text):
+            return {"input_ids": [1, 2, 3]}
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    Image.fromarray(np.zeros((100, 50, 3), dtype="uint8")).save(images_dir / "a.png")
+    caching.build_caches_from_images(
+        str(images_dir),
+        {"a.png": ["one"]},
+        None,
+        None,
+        None,
+        None,
+        Tokenizer(),
+        str(tmp_path / "cache"),
+        resolution=(64, 96),
+    )
+    assert captured["latents_path"].endswith("a_0064x0096_moss.npz")
+    assert captured["original_size"] == [50, 100]

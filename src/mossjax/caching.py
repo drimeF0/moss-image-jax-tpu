@@ -1,13 +1,27 @@
 from typing import List, Optional, Sequence
 
+from functools import lru_cache
+
+import jax
 import jax.numpy as jnp
 import numpy as np
 
 from . import text_encoder as text_encoder_mod
 from . import vae as vae_mod
 from .data import cache as cache_mod
+from .data.dataset import TEXT_LENGTH_BUCKETS, pad_text_length
 
 MAX_TOKEN_LENGTH = 4096
+
+
+@lru_cache(maxsize=None)
+def _te_forward_fn(cfg):
+    return jax.jit(lambda params, input_ids: text_encoder_mod.forward(params, input_ids, cfg))
+
+
+@lru_cache(maxsize=None)
+def _vae_encode_fn(cfg):
+    return jax.jit(lambda params, pixels: vae_mod.encode(params, pixels, cfg))
 
 
 def format_prompt(prompt: str) -> str:
@@ -19,18 +33,26 @@ def tokenize_prompt(tokenizer, prompt: str, max_length: int = MAX_TOKEN_LENGTH) 
     return np.asarray(ids[:max_length], dtype=np.int64)
 
 
-def encode_prompt_embeds(params, cfg, input_ids_list: Sequence[np.ndarray], jit: bool = True) -> List[np.ndarray]:
-    if jit:
-        import jax
-
-        forward = jax.jit(lambda model_params, ids: text_encoder_mod.forward(model_params, ids, cfg))
-    else:
-        forward = lambda model_params, ids: text_encoder_mod.forward(model_params, ids, cfg)
-
+def encode_prompt_embeds(
+    params,
+    cfg,
+    input_ids_list: Sequence[np.ndarray],
+    jit: bool = True,
+    buckets: Sequence[int] = TEXT_LENGTH_BUCKETS,
+    pad_token_id: int = 0,
+) -> List[np.ndarray]:
     outputs = []
     for input_ids in input_ids_list:
-        hidden = forward(params, jnp.asarray(np.asarray(input_ids)))
-        outputs.append(np.asarray(hidden[0], dtype=np.float32))
+        ids = np.asarray(input_ids)
+        valid_length = ids.shape[0]
+        if jit:
+            target_length = pad_text_length(valid_length, buckets) if valid_length <= buckets[-1] else valid_length
+            padded = np.full(target_length, int(pad_token_id), dtype=np.int64)
+            padded[:valid_length] = ids
+            hidden = _te_forward_fn(cfg)(params, jnp.asarray(padded))
+        else:
+            hidden = text_encoder_mod.forward(params, jnp.asarray(ids), cfg)
+        outputs.append(np.asarray(hidden[0, :valid_length], dtype=np.float32))
     return outputs
 
 
@@ -52,7 +74,7 @@ def write_te_cache(
 
 def write_latents_cache(path, params, cfg, pixels: np.ndarray, original_size: Optional[Sequence[int]] = None):
     x = jnp.asarray(np.asarray(pixels, dtype=np.float32))[None]
-    latents = np.asarray(vae_mod.encode(params, x, cfg), dtype=np.float32)[0]
+    latents = np.asarray(_vae_encode_fn(cfg)(params, x), dtype=np.float32)[0]
     height, width = latents.shape[-2:]
     original = list(original_size) if original_size is not None else [latents.shape[-1] * 8, latents.shape[-2] * 8]
     cache_mod.save_latents(
@@ -77,6 +99,7 @@ def build_caches_from_images(
     bucket_steps: int = 64,
     caption_dropout_rate: float = 0.0,
     max_samples: Optional[int] = None,
+    resolution: Optional[Sequence[int]] = None,
     progress: bool = True,
     log_every: int = 1,
 ):
@@ -88,8 +111,10 @@ def build_caches_from_images(
     from .data import buckets
 
     os.makedirs(output_dir, exist_ok=True)
-    manager = buckets.BucketManager(False, tuple(max_resolution), 256, max(max_resolution), bucket_steps)
-    manager.make_buckets()
+    manager = None
+    if resolution is None:
+        manager = buckets.BucketManager(False, tuple(max_resolution), 256, max(max_resolution), bucket_steps)
+        manager.make_buckets()
     uncond_ids = tokenize_prompt(tokenizer, "")
     items = list(prompts.items())
     if max_samples is not None:
@@ -100,9 +125,14 @@ def build_caches_from_images(
         image_started = time.time()
         image_path = os.path.join(images_dir, name)
         image = Image.open(image_path).convert("RGB")
-        reso, resized_size, _ = manager.select_bucket(*image.size)
-        image = image.resize(resized_size, Image.LANCZOS)
-        width, height = resized_size
+        original_size = image.size
+        if manager is not None:
+            reso, _, _ = manager.select_bucket(*image.size)
+            target_size = tuple(reso)
+        else:
+            target_size = tuple(resolution)
+        image = image.resize(target_size, Image.LANCZOS)
+        width, height = target_size
         pixels = np.asarray(image, dtype=np.float32) / 127.5 - 1.0
         pixels = pixels.transpose(2, 0, 1)
 
@@ -111,7 +141,9 @@ def build_caches_from_images(
         if parent:
             os.makedirs(parent, exist_ok=True)
         latents_path = stem + f"_{width:04d}x{height:04d}_moss.npz"
-        write_latents_cache(latents_path, vae_params, vae_cfg, pixels, original_size=[width, height])
+        write_latents_cache(
+            latents_path, vae_params, vae_cfg, pixels, original_size=[original_size[0], original_size[1]]
+        )
         latents_done = time.time()
 
         te_path = stem + "_moss_te.npz"
@@ -122,6 +154,8 @@ def build_caches_from_images(
         te_done = time.time()
         cached.append(name)
 
+        if progress and index == 0:
+            print("[cache] first image includes XLA compilation for the current shapes", flush=True)
         if progress and ((index + 1) % max(log_every, 1) == 0 or index == len(items) - 1):
             elapsed = te_done - total_started
             eta = elapsed / (index + 1) * (len(items) - index - 1)

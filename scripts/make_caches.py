@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("--te-config", default=None, help="Qwen3.5-9B config.json (defaults to the vendored reference)")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--max-resolution", type=int, nargs=2, default=[1024, 1024])
+    parser.add_argument("--resolution", type=int, nargs=2, default=None, help="fixed target W H (default: per-image bucketing)")
     parser.add_argument("--bucket-steps", type=int, default=64)
     parser.add_argument("--caption-dropout-rate", type=float, default=0.0)
     parser.add_argument("--int8-te", action="store_true")
@@ -82,6 +83,7 @@ def main():
         max_resolution=tuple(args.max_resolution),
         bucket_steps=args.bucket_steps,
         caption_dropout_rate=args.caption_dropout_rate,
+        resolution=tuple(args.resolution) if args.resolution else None,
     )
     print(f"cached {len(cached)} images into {args.output_dir}")
 
