@@ -7,11 +7,13 @@ from .cache import (
     load_latents,
     load_te_outputs,
     pad_embeds,
+    read_latents_original_size,
     save_latents,
     save_te_outputs,
     select_candidate,
     uint16_to_float32,
 )
+from .config import DatasetConfig, DatasetSpec, SubsetConfig, build_records, load_dataset_config, parse_resolution
 from .dataset import TEXT_LENGTH_BUCKETS, CachedDataset, pad_text_length
 
 __all__ = [
@@ -24,6 +26,7 @@ __all__ = [
     "load_latents",
     "load_te_outputs",
     "pad_embeds",
+    "read_latents_original_size",
     "save_latents",
     "save_te_outputs",
     "select_candidate",
@@ -31,4 +34,10 @@ __all__ = [
     "TEXT_LENGTH_BUCKETS",
     "CachedDataset",
     "pad_text_length",
+    "DatasetConfig",
+    "DatasetSpec",
+    "SubsetConfig",
+    "build_records",
+    "load_dataset_config",
+    "parse_resolution",
 ]

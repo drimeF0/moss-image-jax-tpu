@@ -45,6 +45,8 @@ class CachedDataset:
         self.seed = seed
         self.vae_stats = vae_stats
         self.rng = np.random.default_rng(seed)
+        weights = np.array([max(1, int(record.get("num_repeats", 1))) for record in self.records], dtype=np.float64)
+        self.weights = weights / weights.sum()
 
     def __len__(self):
         return len(self.records)
@@ -52,11 +54,14 @@ class CachedDataset:
     def _load_record(self, record: dict):
         text_record = cache_mod.load_te_outputs(record["text_encoder"])
         candidate = cache_mod.select_candidate(text_record, self.rng)
+        dropout_rate = record.get("caption_dropout_rate")
+        if dropout_rate is None:
+            dropout_rate = text_record["caption_dropout_rate"]
         use_uncond = (
             self.caption_dropout
             and text_record["uncond"] is not None
-            and text_record["caption_dropout_rate"] > 0.0
-            and self.rng.random() < text_record["caption_dropout_rate"]
+            and dropout_rate > 0.0
+            and self.rng.random() < dropout_rate
         )
         if use_uncond:
             embeds, mask = text_record["uncond"]["embeds"], text_record["uncond"]["mask"]
@@ -64,7 +69,8 @@ class CachedDataset:
             embeds, mask = candidate["embeds"], candidate["mask"]
         target_length = pad_text_length(embeds.shape[0], self.buckets)
         embeds, mask = pad_to_length(embeds, mask, target_length)
-        latents = cache_mod.load_latents(record["latents"][0], self.bucket_reso)
+        bucket_reso = record.get("bucket", self.bucket_reso)
+        latents = cache_mod.load_latents(record["latents"][0], tuple(bucket_reso))
         if self.vae_stats is not None:
             latents = np.asarray(vae_mod.patchify(jnp.asarray(latents)[None]), dtype=np.float32)[0]
             latents = np.asarray(
@@ -75,7 +81,7 @@ class CachedDataset:
 
     def sample(self, index: Optional[int] = None):
         if index is None:
-            index = int(self.rng.integers(0, len(self.records)))
+            index = int(self.rng.choice(len(self.records), p=self.weights))
         record = self.records[index % len(self.records)]
         latents, embeds, mask = self._load_record(record)
         return {

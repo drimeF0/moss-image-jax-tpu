@@ -104,5 +104,28 @@ N = H/16·W/16; последовательность `[image, text]`; image-upst
   `uncond_skip_layers` — пропуск основных блоков в uncond-ветке (default 22).
 - Размеры: `height/width` округляются вниз до кратных 16; шум — fp32.
 
+### FIXES #13. .toml датасет (формат sd-scripts)
+- Приоритет настроек: `[[datasets.subsets]]` > `[[datasets]]` >
+  `[general]` (верхнеуровневые ключи вне `datasets` считаются general).
+- Дефолты: `enable_bucket=false`, `min_bucket_reso=256`,
+  `max_bucket_reso=1024`, `bucket_reso_steps=64`, `bucket_no_upscale=false`,
+  `batch_size=1`, `num_repeats=1`, `caption_extension=".txt"`.
+- `resolution`: int, `"W,H"` или `[W,H]`; bucketing считается от
+  `original_size_*` в npz латентов через `BucketManager`; запись получает
+  `bucket`, `num_repeats`, `caption_dropout_rate` (override кэша).
+- Относительные пути (`image_dir`, `metadata_file`) разрешаются относительно
+  каталога .toml (удобнее upstream-поведения от cwd; задокументировано).
+- Сэмплирование записей — взвешенное по `num_repeats`; текст паддится до
+  бакетов 128/256/512/1024/2048/4096.
+
+### FIXES #14. Оптимизаторы
+- `adamw` — как раньше (`b1=0.9`, `b2=0.999`, `eps=1e-8`, weight decay).
+- `adafactor` — optax: `scale_parameter` ↔ `multiply_by_parameter_scale`,
+  `relative_step` → `learning_rate=None`, плюс `decay_rate=0.8`,
+  `clipping_threshold=1.0`, `momentum=None` (по умолчанию), `eps=1e-30`,
+  `min_dim_size_to_factor=128`. Естественный масштаб lr у Adafactor другой
+  (для tiny-тестов ~0.02 против AdamW ~0.05); clip-by-global-norm общий.
+
+
 
 

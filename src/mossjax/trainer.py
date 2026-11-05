@@ -24,19 +24,40 @@ class TrainConfig:
     remat: bool = True
     loss_type: str = "mse"
     huber_c: float = 0.1
+    optimizer: str = "adamw"
+    adafactor_scale_parameter: bool = True
+    adafactor_relative_step: bool = False
+    adafactor_decay_rate: float = 0.8
+    adafactor_clipping_threshold: float = 1.0
+    adafactor_momentum: Optional[float] = None
+    adafactor_eps: float = 1e-30
+    adafactor_min_dim_size_to_factor: int = 128
 
 
 def make_optimizer(train_config: TrainConfig):
-    return optax.chain(
-        optax.clip_by_global_norm(train_config.max_grad_norm),
-        optax.adamw(
+    if train_config.optimizer == "adamw":
+        inner = optax.adamw(
             learning_rate=train_config.learning_rate,
             b1=train_config.beta1,
             b2=train_config.beta2,
             eps=train_config.eps,
             weight_decay=train_config.weight_decay,
-        ),
-    )
+        )
+    elif train_config.optimizer == "adafactor":
+        learning_rate = None if train_config.adafactor_relative_step else train_config.learning_rate
+        inner = optax.adafactor(
+            learning_rate=learning_rate,
+            multiply_by_parameter_scale=train_config.adafactor_scale_parameter,
+            decay_rate=train_config.adafactor_decay_rate,
+            clipping_threshold=train_config.adafactor_clipping_threshold,
+            momentum=train_config.adafactor_momentum,
+            weight_decay_rate=train_config.weight_decay if train_config.weight_decay > 0 else None,
+            eps=train_config.adafactor_eps,
+            min_dim_size_to_factor=train_config.adafactor_min_dim_size_to_factor,
+        )
+    else:
+        raise ValueError(f"unknown optimizer {train_config.optimizer!r}")
+    return optax.chain(optax.clip_by_global_norm(train_config.max_grad_norm), inner)
 
 
 def init_train_state(params, cfg: MossConfig, train_config: TrainConfig, rng):

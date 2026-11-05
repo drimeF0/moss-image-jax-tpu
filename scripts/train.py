@@ -27,7 +27,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dit", required=True, help="first shard or single-file safetensors of the MOSS-Image DiT")
     parser.add_argument("--vae", default=None, help="FLUX.2 VAE safetensors (needed for latent normalization stats)")
-    parser.add_argument("--cache-dir", required=True, help="directory with *_moss.npz and *_moss_te.npz caches")
+    parser.add_argument("--cache-dir", default=None, help="directory with *_moss.npz and *_moss_te.npz caches")
+    parser.add_argument("--dataset-config", default=None, help="sd-scripts style .toml dataset config (alternative to --cache-dir)")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--bucket-width", type=int, default=1024)
     parser.add_argument("--bucket-height", type=int, default=1024)
@@ -36,6 +37,14 @@ def parse_args():
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--optimizer", default="adamw", choices=["adamw", "adafactor"])
+    parser.add_argument("--adafactor-decay-rate", type=float, default=0.8)
+    parser.add_argument("--adafactor-clipping-threshold", type=float, default=1.0)
+    parser.add_argument("--adafactor-momentum", type=float, default=None)
+    parser.add_argument("--adafactor-relative-step", action="store_true")
+    parser.add_argument("--adafactor-no-scale-parameter", action="store_true")
+    parser.add_argument("--adafactor-eps", type=float, default=1e-30)
+    parser.add_argument("--adafactor-min-dim-size-to-factor", type=int, default=128)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--save-every", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
@@ -77,9 +86,17 @@ def main():
             "running_var": np.asarray(vae_params["bn"]["running_var"]),
         }
 
-    records = cache_mod.find_cache_pairs(args.cache_dir)
+    if args.cache_dir is None and args.dataset_config is None:
+        raise SystemExit("either --cache-dir or --dataset-config is required")
+    if args.dataset_config is not None:
+        from mossjax.data import build_records, load_dataset_config
+
+        dataset_config = load_dataset_config(args.dataset_config)
+        records = build_records(dataset_config)
+    else:
+        records = cache_mod.find_cache_pairs(args.cache_dir)
     if not records:
-        raise SystemExit(f"no cache pairs found in {args.cache_dir}")
+        raise SystemExit(f"no cache pairs found in {args.cache_dir or args.dataset_config}")
     print(f"found {len(records)} cached samples")
 
     train_config = trainer.TrainConfig(
@@ -90,6 +107,14 @@ def main():
         max_grad_norm=args.max_grad_norm,
         remat=not args.no_remat,
         loss_type=args.loss_type,
+        optimizer=args.optimizer,
+        adafactor_scale_parameter=not args.adafactor_no_scale_parameter,
+        adafactor_relative_step=args.adafactor_relative_step,
+        adafactor_decay_rate=args.adafactor_decay_rate,
+        adafactor_clipping_threshold=args.adafactor_clipping_threshold,
+        adafactor_momentum=args.adafactor_momentum,
+        adafactor_eps=args.adafactor_eps,
+        adafactor_min_dim_size_to_factor=args.adafactor_min_dim_size_to_factor,
     )
     loop_config = train_mod.LoopConfig(
         steps=args.steps,

@@ -162,11 +162,16 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 ### Ф5. Данные (сделано ядро)
 - `src/mossjax/data/buckets.py` — `make_bucket_resolutions` и `BucketManager`
   (оба режима: с апскейлом и `no_upscale`), паритет с upstream по значениям.
+- `src/mossjax/data/config.py` — `.toml`-конфиг sd-scripts: general/dataset/
+  subset с приоритетами, `resolution` int/str/list, bucketing по
+  `original_size_*`, `build_records`.
+- `src/mossjax/data/dataset.py` — `CachedDataset`: взвешивание по
+  `num_repeats`, per-record бакеты, caption dropout override, паддинг текста.
 - `src/mossjax/data/cache.py` — чтение/запись `*_moss.npz` и
   `*_moss_te.npz` ровно в формате upstream (включая старый TE-формат),
-  bf16 RNE биты, `pad_embeds`, выбор кандидата, поиск пар кэшей.
-- Осталось: парсер `.toml` датасета (subsets, metadata.json, caption dropout,
-  multiline), итератор бакетов, flip/alpha-маска.
+  bf16 RNE биты, `pad_embeds`, `read_latents_original_size`, поиск пар кэшей.
+- Осталось: metadata.json (fine-tuning style), flip_aug/alpha-маска,
+  shuffle_caption/keep_tokens.
 
 ### Ф6. LoRA и совместимость (сделано)
 - `src/mossjax/lora.py`: kohya-раскладка `lora_unet_layers_N_proj_*`
@@ -181,8 +186,9 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 - `src/mossjax/losses.py`: все режимы t-sampling (включая
   `truncated_logit_normal` с паритетом к upstream), сетка планировщика,
   weighting, rectified-flow лосс (reduction 1:1).
-- `src/mossjax/trainer.py`: optax AdamW + clip, `train_step` (grad только по
-  LoRA, база заморожена), remat блоков в `model.forward`.
+- `src/mossjax/trainer.py`: optax AdamW / Adafactor (`optimizer="adamw"|"adafactor"`,
+  scale_parameter/relative_step/momentum/clipping), clip, `train_step`
+  (grad только по LoRA, база заморожена), remat блоков в `model.forward`.
 - `src/mossjax/train.py`: `train_loop` по `CachedDataset` (кандидаты капшенов,
   caption dropout, паддинг текста до бакетов 128..4096), лог loss/current,
   чекпойнты LoRA каждые N шагов + финальный файл.

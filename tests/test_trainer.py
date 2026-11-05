@@ -148,3 +148,44 @@ def test_accumulated_grads_match_full_batch():
     expected_loss = float(loss_for(lora0, full))
     np.testing.assert_allclose(float(metrics["loss"]), expected_loss, rtol=1e-5)
     assert not np.array_equal(np.asarray(state2["lora"]["layers"][0]["proj"]["q"]["A"]), np.asarray(lora0["layers"][0]["proj"]["q"]["A"]))
+
+
+def test_adafactor_train_step_reduces_loss():
+    params = _params(_torch_model())
+    config = trainer.TrainConfig(
+        rank=4,
+        learning_rate=0.02,
+        optimizer="adafactor",
+        adafactor_scale_parameter=False,
+        adafactor_relative_step=False,
+        adafactor_clipping_threshold=1.0,
+        remat=True,
+    )
+    state, optimizer = trainer.init_train_state(params, CFG, config, jax.random.PRNGKey(7))
+    step = trainer.make_train_step(CFG, config, optimizer)
+    batch = _batch(seed=5)
+    losses = []
+    for _ in range(25):
+        state, metrics = step(state, params, *batch)
+        losses.append(float(metrics["loss"]))
+    assert np.mean(losses[-5:]) < 0.5 * np.mean(losses[:5])
+    assert all(np.isfinite(losses))
+
+
+def test_adafactor_relative_step_runs():
+    params = _params(_torch_model())
+    config = trainer.TrainConfig(
+        rank=2,
+        optimizer="adafactor",
+        adafactor_relative_step=True,
+        adafactor_scale_parameter=True,
+    )
+    state, optimizer = trainer.init_train_state(params, CFG, config, jax.random.PRNGKey(8))
+    step = trainer.make_train_step(CFG, config, optimizer)
+    state, metrics = step(state, params, *_batch(seed=6))
+    assert np.isfinite(float(metrics["loss"]))
+
+
+def test_make_optimizer_rejects_unknown():
+    with np.testing.assert_raises(ValueError):
+        trainer.make_optimizer(trainer.TrainConfig(optimizer="sgd"))

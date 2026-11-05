@@ -60,7 +60,20 @@ def load_latents(path, bucket_reso, stride: int = LATENT_STRIDE) -> np.ndarray:
             return npz["latents" + suffix].astype(np.float32)
         if "latents" in npz.files:
             return npz["latents"].astype(np.float32)
-        raise KeyError(f"latents not found in {path} (tried latents{suffix} and latents)")
+        for key in npz.files:
+            if key.startswith("latents_"):
+                return npz[key].astype(np.float32)
+        raise KeyError(f"latents not found in {path} (tried latents{suffix}, latents and any latents_* key)")
+
+
+def read_latents_original_size(path):
+    with np.load(path) as npz:
+        for key in npz.files:
+            if key.startswith("original_size"):
+                value = npz[key].tolist()
+                if len(value) == 2:
+                    return int(value[0]), int(value[1])
+    return None
 
 
 def save_te_outputs(path, candidates: List[Tuple[np.ndarray, str]], uncond_embeds, caption_dropout_rate: float = 0.0):
@@ -123,7 +136,7 @@ def pad_embeds(embeds_list: List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
     return padded, mask
 
 
-def find_cache_pairs(directory: str) -> List[Dict]:
+def find_cache_pairs(directory: str, num_repeats: int = 1, caption_dropout_rate: Optional[float] = None) -> List[Dict]:
     records = []
     pattern = os.path.join(directory, "**", "*" + MOSS_TE_SUFFIX)
     for te_path in sorted(glob.glob(pattern, recursive=True)):
@@ -132,5 +145,13 @@ def find_cache_pairs(directory: str) -> List[Dict]:
         if not latents:
             latents = sorted(glob.glob(glob.escape(stem) + MOSS_LATENTS_SUFFIX))
         if latents:
-            records.append({"key": stem, "text_encoder": te_path, "latents": latents})
+            records.append(
+                {
+                    "key": stem,
+                    "text_encoder": te_path,
+                    "latents": latents,
+                    "num_repeats": int(num_repeats),
+                    "caption_dropout_rate": caption_dropout_rate,
+                }
+            )
     return records
