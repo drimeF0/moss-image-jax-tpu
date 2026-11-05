@@ -31,10 +31,15 @@ Colab/Kaggle TPU (один TPU-процесс на сессию): ноутбук
 без скачивания весов, затем реальный прогон:
 
 ```bash
+python scripts/prepare_quantized.py --dit ... --text-encoder ... --output-dir ...  # один раз
 python scripts/colab_run.py --mode smoke --output-dir /content/moss_out/smoke
-python scripts/colab_run.py --mode full --dit ... --vae ... --text-encoder ... \
-    --tokenizer ... --images-dir ... --prompts prompts.json --output-dir ... --int8
+python scripts/colab_run.py --mode full --dit ..._dit_int8.safetensors \
+    --vae ... --text-encoder ..._te_int8.safetensors --tokenizer ... \
+    --images-dir ... --prompts prompts.json --output-dir ...
 ```
+
+`prepare_quantized.py` сохраняет int8-веса и скейлы в один safetensors (загрузка —
+обычное чтение, без квантования на каждом запуске).
 
 Отдельные стадии: `scripts/make_caches.py`, `scripts/train.py`
 (AdamW/Adafactor, `--dataset-config dataset.toml`), `scripts/sample.py`.

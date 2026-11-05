@@ -149,6 +149,19 @@ N = H/16·W/16; последовательность `[image, text]`; image-upst
   и attention. bf16 MXU и так аккумулирует в fp32; VAE (fp32) остаётся на HIGHEST.
 - Регрессионный тест: bf16-шаг обучения на tiny-модели + проверка выбора precision.
 
+### FIXES #17. Пре-квантизованные чекпойнты (формат int8+scale)
+- `scripts/prepare_quantized.py` (ядро — `mossjax.prepare`): один safetensors на
+  модель — `<key>` int8 для целевых слоёв + `<key>.scale` fp32 [out], остальные
+  веса как есть (bf16 сохраняется нативно, safetensors+ml_dtypes).
+- Metadata: `mossjax_format="int8+scale"`, `mossjax_act_dtype` (bf16/fp32).
+  Лоадеры (`weights.load_params`, `text_encoder.load_params`) авто-детектят
+  `<key>.scale` и собирают quant-leaf'ы без пересчёта; `--int8` для таких
+  файлов — no-op.
+- Область квантования 1:1 с ConvRot: DiT `layers.*.proj.*`, TE проекции +
+  `embed_tokens`. Готовить один раз на высокоRAM-машине (пик при подготовке:
+  выходной dict + один входной шард), затем на v5e-1 грузить только int8.
+
+
 
 
 

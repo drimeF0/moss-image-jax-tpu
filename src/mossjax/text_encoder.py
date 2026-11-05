@@ -332,19 +332,43 @@ TE_QUANT_SUFFIXES = (
 )
 
 
-def _is_quant_target(key: str) -> bool:
+def is_quant_target(key: str) -> bool:
     return key.endswith(TE_QUANT_SUFFIXES)
 
 
-def state_dict_to_params(sd: Dict, cfg: TextConfig, strict: bool = False, quantize: bool = False):
+def _prepared_scales(sd):
+    prepared = {}
+    for key, value in sd.items():
+        if key.endswith(".scale"):
+            stripped = strip_text_encoder_key(key[: -len(".scale")])
+            if stripped is not None:
+                prepared[stripped] = value
+    return prepared
+
+
+def state_dict_to_params(sd: Dict, cfg: TextConfig, strict: bool = False, quantize: bool = False, act_dtype=None):
     expected = param_shapes(cfg)
+    prepared = _prepared_scales(sd)
     flat = {}
     for key, value in sd.items():
+        if key.endswith(".scale"):
+            continue
+        stripped = strip_text_encoder_key(key)
+        if stripped is None:
+            continue
+        key = stripped
         if key not in expected:
             if "rotary_emb." in key:
                 continue
             if strict:
                 raise ValueError(f"unexpected text encoder key: {key}")
+            continue
+        if key in prepared and np.asarray(value).dtype == np.int8:
+            flat[key] = {
+                "int8": np.asarray(value),
+                "scale": np.asarray(prepared[key]),
+                "act_dtype": np.zeros((), dtype=act_dtype if act_dtype is not None else np.float32),
+            }
             continue
         shape = value["int8"].shape if isinstance(value, dict) else np.asarray(value).shape
         if tuple(shape) != tuple(expected[key]):
@@ -356,7 +380,7 @@ def state_dict_to_params(sd: Dict, cfg: TextConfig, strict: bool = False, quanti
 
     converted = {}
     for key, value in flat.items():
-        if quantize and isinstance(value, np.ndarray) and _is_quant_target(key):
+        if quantize and isinstance(value, np.ndarray) and is_quant_target(key):
             converted[key] = quant.leaf_from_host(quant.host_layer(value))
         elif isinstance(value, dict):
             converted[key] = quant.leaf_from_host(value)
@@ -400,7 +424,11 @@ def load_state_dict_from_safetensors(paths):
 
 
 def load_params(paths, cfg: TextConfig, dtype=None, quantize_int8: bool = False):
-    params = state_dict_to_params(load_state_dict_from_safetensors(paths), cfg, quantize=quantize_int8)
+    metadata = weights_mod.read_safetensors_metadata(paths)
+    act_dtype = quant.dtype_from_name(metadata.get(quant.META_ACT_DTYPE)) if metadata else None
+    params = state_dict_to_params(
+        load_state_dict_from_safetensors(paths), cfg, quantize=quantize_int8, act_dtype=act_dtype
+    )
     if dtype is not None:
         params = weights_mod.cast_tree(params, dtype)
     return params

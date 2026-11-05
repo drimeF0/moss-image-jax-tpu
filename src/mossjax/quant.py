@@ -6,6 +6,23 @@ from jax import lax
 PRECISION = lax.Precision.HIGHEST
 INT8_MAX = 127.0
 INV_INT8_MAX = np.float32(1.0) / np.float32(INT8_MAX)
+META_ACT_DTYPE = "mossjax_act_dtype"
+META_FORMAT = "mossjax_format"
+FORMAT_INT8_SCALE = "int8+scale"
+
+
+def dtype_name(dtype) -> str:
+    return np.dtype(dtype).name
+
+
+def dtype_from_name(name):
+    if name is None:
+        return None
+    return {
+        "bfloat16": jnp.bfloat16,
+        "float32": jnp.float32,
+        "float16": jnp.float16,
+    }.get(str(name))
 
 
 def quantize_weight_host(weight):
