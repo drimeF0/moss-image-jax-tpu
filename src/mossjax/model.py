@@ -27,6 +27,14 @@ def linear(x, weight, bias=None):
     return y
 
 
+def linear_with_lora(x, weight, lora_leaf):
+    y = linear(x, weight)
+    if lora_leaf is not None:
+        inner = linear(x.astype(lora_leaf["A"].dtype), lora_leaf["A"])
+        y = y + linear(inner, lora_leaf["B"]) * lora_leaf["scale"]
+    return y
+
+
 def rms_norm(x, weight, eps=1e-6):
     xf = x.astype(jnp.float32)
     y = xf * lax.rsqrt(jnp.mean(jnp.square(xf), axis=-1, keepdims=True) + eps)
@@ -104,17 +112,27 @@ def get_time_modulation(timesteps, params, cfg):
     return mod, head
 
 
-def main_block(x, rope, modulation, params, key_mask, cfg):
+def main_block(x, rope, modulation, params, key_mask, cfg, lora_block=None):
     shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = jnp.split(modulation, 6, axis=1)
     norm_dtype = params["norm1"]["weight"].dtype
+    lora_proj = None if lora_block is None else lora_block["proj"]
+
+    def lora_leaf(name):
+        return None if lora_proj is None else lora_proj[name]
 
     y = rms_norm(x, params["norm1"]["weight"])
     y = (y * (1 + scale_a) + shift_a).astype(norm_dtype)
 
     batch, length, _ = y.shape
-    q = linear(y, params["proj"]["q"]["weight"]).reshape(batch, length, cfg.num_heads, cfg.head_dim)
-    k = linear(y, params["proj"]["k"]["weight"]).reshape(batch, length, cfg.num_heads, cfg.head_dim)
-    v = linear(y, params["proj"]["v"]["weight"]).reshape(batch, length, cfg.num_heads, cfg.head_dim)
+    q = linear_with_lora(y, params["proj"]["q"]["weight"], lora_leaf("q")).reshape(
+        batch, length, cfg.num_heads, cfg.head_dim
+    )
+    k = linear_with_lora(y, params["proj"]["k"]["weight"], lora_leaf("k")).reshape(
+        batch, length, cfg.num_heads, cfg.head_dim
+    )
+    v = linear_with_lora(y, params["proj"]["v"]["weight"], lora_leaf("v")).reshape(
+        batch, length, cfg.num_heads, cfg.head_dim
+    )
     q = rms_norm(q, params["q_norm"]["weight"])
     k = rms_norm(k, params["k_norm"]["weight"])
     q = apply_rope(q, rope).astype(v.dtype)
@@ -122,12 +140,12 @@ def main_block(x, rope, modulation, params, key_mask, cfg):
 
     attn = attention(q, k, v, key_mask)
     o = params["proj"]["o"]["weight"]
-    x = x + linear(attn.astype(weight_dtype(o)), o) * gate_a
+    x = x + linear_with_lora(attn.astype(weight_dtype(o)), o, lora_leaf("o")) * gate_a
 
     y = rms_norm(x, params["norm2"]["weight"])
     y = (y * (1 + scale_f) + shift_f).astype(norm_dtype)
-    hidden, gate = jnp.split(linear(y, params["proj"]["ffn_up_gate"]["weight"]), 2, axis=-1)
-    x = x + linear(situ_glu(hidden, gate), params["proj"]["ffn_down"]["weight"]) * gate_f
+    hidden, gate = jnp.split(linear_with_lora(y, params["proj"]["ffn_up_gate"]["weight"], lora_leaf("ffn_up_gate")), 2, axis=-1)
+    x = x + linear_with_lora(situ_glu(hidden, gate), params["proj"]["ffn_down"]["weight"], lora_leaf("ffn_down")) * gate_f
     return x
 
 
@@ -158,7 +176,7 @@ def text_embedder(context, rope_text, context_mask, params, cfg):
     return x
 
 
-def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CONFIG, skip_layers=()):
+def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CONFIG, skip_layers=(), lora=None):
     batch, channels, height, width = x.shape
     num_img = height * width
     text_length = context.shape[1]
@@ -184,7 +202,8 @@ def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CON
     for index, block in enumerate(params["layers"]):
         if index in skip:
             continue
-        hidden = main_block(hidden, rope, mod, block, key_mask, cfg)
+        lora_block = None if lora is None else lora["layers"][index]
+        hidden = main_block(hidden, rope, mod, block, key_mask, cfg, lora_block)
 
     hidden = hidden[:, :num_img]
     fnw = params["final_norm_video"]["weight"]
