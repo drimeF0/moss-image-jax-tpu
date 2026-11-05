@@ -46,3 +46,24 @@ TE — bf16, VAE — fp32 независимо от mixed_precision. DiT в об
 DiT вход `[B, 128, H/16, W/16]` (patchified normalized latents), выход такой же.
 N = H/16·W/16; последовательность `[image, text]`; image-upstream: H,W — сетка
 токенов (`height=H/16` в RoPE). Паддинг латентов не существует (бакеты кратны 16).
+
+### FIXES #9. Qwen3.5 TE
+- `Qwen3_5RMSNorm` zero-centered: `x_fp32 * rsqrt(mean(x²)+eps)`, затем
+  `(* (1 + weight))` в fp32 и каст к dtype входа (weight инициализируется
+  нулями, используется `1 + w`).
+- `Qwen3_5RMSNormGated` (GDN-выход): нормировка в fp32, `weight * x.to(dtype)`,
+  затем `* silu(gate.float())` и каст обратно.
+- Gated DeltaNet: q/k — l2norm + `1/sqrt(head_dim)`; `g = -exp(A_log) *
+  softplus(a + dt_bias)` (softplus с threshold 20); `beta = sigmoid(b)`;
+  рекуррентное состояние fp32 `[B, num_v_heads, k_dim, v_dim]`; q/k
+  расширяются repeat_interleave до num_v_heads ДО l2norm-правила.
+- GDN causal conv (kernel 4, depthwise, silu) с левым паддингом `k-1`.
+- Full attention: `q_proj` даёт 2×head_dim (q + gate), gate применяется
+  сигмоидой к выходу внимания до `o_proj`; q/k-norm zero-centered; GQA
+  `repeat_kv` (kv-major, затем n_rep); partial RoPE (rotary_dim = 0.25·head_dim)
+  — half-split на первых rotary_dim осях.
+- mRoPE для текста: позиции всех трёх осей равны, поэтому
+  `recomposition_frequencies` — тождество, cos/sin = `cat((cos(f), cos(f)))`.
+  В upstream версия transformers зафиксирована 5.12.1; локальный паритет
+  проверяется на установленной версии (5.22.0), см. PLAN §7.
+

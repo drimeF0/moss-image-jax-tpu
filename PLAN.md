@@ -111,8 +111,9 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 ## 5. Фазы
 
 Статус: Ф0 ✅ · Ф1 ✅ · Ф2 ⏳ (int8 слоя DiT сделан; лоадер реальных шардов ждёт файлов) ·
+Ф3 ⏳ (forward TE с паритетом; int8/кэширование/стриминг — дальше) ·
 Ф4 ✅ · Ф6 ⏳ (ядро LoRA и интероп сделаны; per-module dims/lr, EMA — позже) ·
-Ф3, Ф5, Ф7, Ф8 — запланированы.
+Ф5, Ф7, Ф8 — запланированы.
 
 ### Ф0. Инфраструктура (сделано)
 - Репо, pyproject, .gitignore, вендоринг reference `tests/reference/kohya_sd_scripts/`.
@@ -138,13 +139,15 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 - Осталось: smoke на реальном чекпойнте (первый шард), HLO-проверка s8×s8→s32
   на v5e, custom_vjp int8-fwd/bf16-bwd (перф, не память).
 
-### Ф3. Qwen3.5-9B TE (24 Gated DeltaNet + 8 full attn)
-- Порт forward, per-sample, без паддинга; паритет с
-  `transformers.Qwen3_5TextModel` (CPU, fp32/bf16).
-- int8 для проекций; `mamba_ssm_dtype float32` для рекурренции.
-- Отдельный режим: encoder-pass c кэшированием TE-выходов (`*_moss_te.npz`
-  формат), стриминг весов с host RAM для 16 ГБ.
-- Токенизация: чат-темплейт, `MAX_TOKEN_LENGTH=4096`, кандидаты-капшены.
+### Ф3. Qwen3.5-9B TE (24 Gated DeltaNet + 8 full attn) — forward готов
+- `src/mossjax/text_encoder.py`: embeddings, zero-centered RMSNorm,
+  GatedDeltaNet (conv1d + recurrent gated delta rule, fp32 state), full attention
+  (GQA, partial RoPE, q-gate), MLP, `config_from_hf`/`load_config`.
+- Паритет с `transformers.Qwen3_5TextModel` (eager, CPU): полный forward и
+  отдельные linear/full слои, вход без паддинга, per-sample.
+- Осталось: запуск TE-прохода на TPU с int8 (проекции + embed_tokens),
+  кэширование выходов в `*_moss_te.npz`, стриминг весов с host RAM;
+  опционально chunked-вариант delta rule (сейчас O(L)-scan).
 
 ### Ф4. FLUX.2 VAE (сделано)
 - `src/mossjax/vae.py`: NCHW-порт encoder/decoder (GroupNorm, Resnet, Attention,
