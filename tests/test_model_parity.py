@@ -1,4 +1,5 @@
 import numpy as np
+import jax
 import jax.numpy as jnp
 import pytest
 import torch
@@ -100,3 +101,16 @@ def test_missing_key_raises():
     sd.pop("layers.0.proj.q.weight")
     with pytest.raises(ValueError, match="missing keys"):
         jw.state_dict_to_params(sd, CFG)
+
+
+def test_load_params_from_safetensors(tmp_path):
+    from safetensors.torch import save_file
+
+    model = _torch_model()
+    sd = {f"model.diffusion_model.{key}": value for key, value in model.state_dict().items()}
+    path = tmp_path / "dit.safetensors"
+    save_file(sd, str(path))
+    loaded = jw.load_params(str(path), CFG)
+    reference = _params(model)
+    for a, b in zip(jax.tree.leaves(loaded), jax.tree.leaves(reference)):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))

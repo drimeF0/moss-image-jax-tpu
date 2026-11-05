@@ -182,3 +182,23 @@ def tree_dtypes(params):
 
 def cast_tree(params, dtype):
     return jax.tree.map(lambda leaf: leaf.astype(dtype), params)
+
+
+def load_state_dict_from_safetensors(paths, disable_mmap: bool = False):
+    from safetensors import safe_open
+
+    if isinstance(paths, str):
+        paths = [paths]
+    sd = {}
+    for path in paths:
+        with safe_open(str(path), framework="np") as handle:
+            for key in handle.keys():
+                sd[key] = handle.get_tensor(key)
+    return sd
+
+
+def load_params(paths, cfg: MossConfig, dtype=None):
+    params = state_dict_to_params(load_state_dict_from_safetensors(paths), cfg)
+    if dtype is not None:
+        params = cast_tree(params, dtype)
+    return params

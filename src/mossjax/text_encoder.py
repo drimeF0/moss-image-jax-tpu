@@ -290,3 +290,39 @@ def state_dict_to_params(sd: Dict, cfg: TextConfig):
 def load_config(path: str) -> TextConfig:
     with open(path, "r", encoding="utf-8") as handle:
         return config_from_hf(json.load(handle))
+
+
+TEXT_ENCODER_SKIP_PREFIXES = ("visual.", "model.visual.", "mtp.", "lm_head.")
+TEXT_ENCODER_KEY_PREFIXES = ("model.language_model.", "language_model.")
+
+
+def strip_text_encoder_key(key: str):
+    for prefix in TEXT_ENCODER_SKIP_PREFIXES:
+        if key.startswith(prefix):
+            return None
+    for prefix in TEXT_ENCODER_KEY_PREFIXES:
+        if key.startswith(prefix):
+            return key[len(prefix):]
+    return key
+
+
+def load_state_dict_from_safetensors(paths):
+    from safetensors import safe_open
+
+    if isinstance(paths, str):
+        paths = [paths]
+    sd = {}
+    for path in paths:
+        with safe_open(str(path), framework="np") as handle:
+            for key in handle.keys():
+                stripped = strip_text_encoder_key(key)
+                if stripped is not None:
+                    sd[stripped] = handle.get_tensor(key)
+    return sd
+
+
+def load_params(paths, cfg: TextConfig, dtype=None):
+    params = state_dict_to_params(load_state_dict_from_safetensors(paths), cfg)
+    if dtype is not None:
+        params = weights_mod.cast_tree(params, dtype)
+    return params

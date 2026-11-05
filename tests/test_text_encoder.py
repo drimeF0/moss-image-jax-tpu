@@ -1,4 +1,5 @@
 import numpy as np
+import jax
 import jax.numpy as jnp
 import pytest
 import torch
@@ -125,3 +126,18 @@ def test_quantized_forward_close_to_float():
     cosine = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
     assert cosine > 0.9999, cosine
     assert float(np.abs(actual - expected).max()) < 0.1
+
+
+def test_load_params_from_safetensors_skips_vision(tmp_path):
+    from safetensors.torch import save_file
+
+    model = _torch_model()
+    sd = {f"model.language_model.{key}": value for key, value in model.state_dict().items()}
+    sd["visual.patch_embed.weight"] = torch.zeros(3, 3)
+    sd["lm_head.weight"] = torch.zeros(4, 4)
+    path = tmp_path / "te.safetensors"
+    save_file(sd, str(path))
+    loaded = jte.load_params(str(path), CFG)
+    reference = _params(model)
+    for a, b in zip(jax.tree.leaves(loaded), jax.tree.leaves(reference)):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))

@@ -113,7 +113,7 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 Статус: Ф0 ✅ · Ф1 ✅ · Ф2 ⏳ (int8 DiT+TE, лоадер реальных шардов ждёт файлов) ·
 Ф3 ✅ (forward+int8+кэш TE; стриминг весов с host RAM — дальше) ·
 Ф4 ✅ · Ф5 ✅ (бакеты/кэши/датасет; .toml — дальше) · Ф6 ✅ ·
-Ф7 ✅ (лосс/шаг/E2E-цикл/чекпойнты LoRA; grad accumulation, валидация, orbax, лог-совместимость — дальше) ·
+Ф7 ✅ (лосс/шаг/E2E-цикл/чекпойнты LoRA/сэмплер/grad accumulation/CLI; orbax-resume и лог-совместимость — дальше) ·
 Ф8 — запланирована.
 
 ### Ф0. Инфраструктура (сделано)
@@ -188,11 +188,17 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
   чекпойнты LoRA каждые N шагов + финальный файл.
 - `caching.py`: VAE-кэш латентов и TE-кэш (train-time нормализация из
   `bn.running_*`).
+- `src/mossjax/sampling.py`: Euler-сэмплер с CFG и skip-layers, сетка сигм
+  1:1 с upstream (значения зафиксированы тестом).
+- `trainer.make_accumulated_train_step`: накопление градиентов (тест:
+  сумм. градиент == полный батч).
+- `scripts/train.py`: CLI (реальные safetensors DiT/VAE, int8, кэши, LoRA-выход).
 - E2E-тест: картинки → VAE-кэш → TE-кэш → обучение → LoRA-файл грузится в
   upstream `networks.lora_generic` (strict) и форвардит.
-- Осталось: grad accumulation, валидация/сэмплинг, orbax/resume, лог по
-  upstream-формату, `.toml`-датасет, реальные чекпойнты на v5e-1.
-
+- Лоадеры реальных чекпойнтов: `weights.load_params` (префиксы/fused qkv),
+  `text_encoder.load_params` (skip vision/lm_head), `vae.load_vae_params`.
+- Осталось: orbax/resume, лог по upstream-формату, `.toml`-датасет,
+  валидационный цикл в train_loop, прогон на реальных весах v5e-1.
 ### Ф8. TPU v5e-1 и приёмка
 - Smoke на реальном чекпойнте int8; memory_analysis бюджета; attention:
   explicit/splash для S до 8192.

@@ -52,6 +52,48 @@ def init_train_state(params, cfg: MossConfig, train_config: TrainConfig, rng):
     return state, optimizer
 
 
+def make_accumulated_train_step(cfg: MossConfig, train_config: TrainConfig, optimizer, accumulation_steps: int):
+    if accumulation_steps < 1:
+        raise ValueError("accumulation_steps must be >= 1")
+
+    def loss_fn(lora_params, params, latents, noise, sigmas, context, mask, weighting):
+        noisy = noisy_model_input(latents, noise, sigmas)
+        prediction = model_mod.forward(
+            params, noisy, sigmas * NUM_TRAIN_TIMESTEPS, context, mask, cfg, lora=lora_params, remat=train_config.remat
+        )
+        return rectified_flow_loss(
+            prediction,
+            latents,
+            noise,
+            sigmas,
+            weighting,
+            loss_type=train_config.loss_type,
+            huber_c=train_config.huber_c,
+        )
+
+    def mean_loss_and_grads(lora_params, params, batches):
+        def body(carry, batch):
+            loss, grads = jax.value_and_grad(loss_fn)(lora_params, params, *batch)
+            accum, total = carry
+            accum = jax.tree.map(jnp.add, accum, grads)
+            return (accum, total + loss), None
+
+        zeros = jax.tree.map(jnp.zeros_like, lora_params)
+        (accum, total), _ = jax.lax.scan(body, (zeros, jnp.zeros((), jnp.float32)), batches)
+        return total / accumulation_steps, jax.tree.map(lambda x: x / accumulation_steps, accum)
+
+    @jax.jit
+    def train_step(state, params, batches):
+        loss, grads = mean_loss_and_grads(state["lora"], params, batches)
+        updates, opt_state = optimizer.update(grads, state["opt_state"], state["lora"])
+        lora_params = optax.apply_updates(state["lora"], updates)
+        new_state = {"lora": lora_params, "opt_state": opt_state, "step": state["step"] + 1}
+        metrics = {"loss": loss, "grad_norm": optax.global_norm(grads)}
+        return new_state, metrics
+
+    return train_step
+
+
 def make_train_step(cfg: MossConfig, train_config: TrainConfig, optimizer):
     def loss_fn(lora_params, params, latents, noise, sigmas, context, mask, weighting):
         noisy = noisy_model_input(latents, noise, sigmas)

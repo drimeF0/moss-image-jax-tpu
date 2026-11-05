@@ -103,3 +103,48 @@ def test_init_train_state_rejects_nothing():
     leaves = jax.tree.leaves(state["lora"])
     assert len(leaves) == CFG.num_layers * 6 * 3
     assert optimizer is not None
+
+
+def _micro_batch(seed, batch=1, height=3, width=5, length=7):
+    rng = np.random.default_rng(seed)
+    latents = rng.standard_normal((batch, CFG.latent_channels, height, width), dtype=np.float32)
+    noise = rng.standard_normal(latents.shape, dtype=np.float32)
+    sigmas = rng.random(batch, dtype=np.float32)
+    context = rng.standard_normal((batch, length, CFG.text_dim), dtype=np.float32)
+    mask = np.ones((batch, length), dtype=np.int32)
+    weighting = np.ones(batch, dtype=np.float32)
+    return latents, noise, sigmas, context, mask, weighting
+
+
+def test_accumulated_grads_match_full_batch():
+    from mossjax import losses
+
+    params = _params(_torch_model())
+    state, optimizer = trainer.init_train_state(params, CFG, trainer.TrainConfig(rank=2), jax.random.PRNGKey(5))
+    lora0 = state["lora"]
+
+    def loss_for(lora, batch):
+        latents, noise, sigmas, context, mask, weighting = (jnp.asarray(x) for x in batch)
+        noisy = losses.noisy_model_input(latents, noise, sigmas)
+        prediction = jm.forward(params, noisy, sigmas * 1000, context, mask, CFG, lora=lora, remat=True)
+        return losses.rectified_flow_loss(prediction, latents, noise, sigmas, weighting)
+
+    micro0 = _micro_batch(10)
+    micro1 = _micro_batch(11)
+    full = tuple(np.concatenate([a, b], axis=0) for a, b in zip(micro0, micro1))
+
+    _, grads_full = jax.value_and_grad(loss_for)(lora0, full)
+    _, grads0 = jax.value_and_grad(loss_for)(lora0, micro0)
+    _, grads1 = jax.value_and_grad(loss_for)(lora0, micro1)
+    grads_mean = jax.tree.map(lambda a, b: 0.5 * (a + b), grads0, grads1)
+    for a, b in zip(jax.tree.leaves(grads_full), jax.tree.leaves(grads_mean)):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(b), rtol=1e-5, atol=1e-6)
+
+    stacked = tuple(jnp.asarray(np.stack([np.asarray(a), np.asarray(b)])) for a, b in zip(micro0, micro1))
+    step = trainer.make_accumulated_train_step(
+        CFG, trainer.TrainConfig(rank=2, learning_rate=5e-2), optimizer, accumulation_steps=2
+    )
+    state2, metrics = step(state, params, stacked)
+    expected_loss = float(loss_for(lora0, full))
+    np.testing.assert_allclose(float(metrics["loss"]), expected_loss, rtol=1e-5)
+    assert not np.array_equal(np.asarray(state2["lora"]["layers"][0]["proj"]["q"]["A"]), np.asarray(lora0["layers"][0]["proj"]["q"]["A"]))

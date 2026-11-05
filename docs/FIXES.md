@@ -94,4 +94,15 @@ N = H/16·W/16; последовательность `[image, text]`; image-upst
 - bf16-преобразование — round-to-nearest-even (проверено против torch,
   включая tie-случаи).
 
+### FIXES #12. Сэмплинг (валидация/инференс)
+- Сетка: `_sigma_grid(count, shift, total)` с `lower = shift/(total+shift−1)`;
+  снап к убывающей тренировочной сетке (`training_shift=1`), удаление
+  дубликатов, финальный 0. Для 50 шагов / shift 5.0 — 50 шагов (значения
+  зафиксированы тестом).
+- Euler: `x_{i+1} = x_i + (σ_{i+1} − σ_i)·v`, всё в fp32.
+- `timestep = σ·1000` на каждом шаге; CFG: `uncond + scale·(pred − uncond)`;
+  `uncond_skip_layers` — пропуск основных блоков в uncond-ветке (default 22).
+- Размеры: `height/width` округляются вниз до кратных 16; шум — fp32.
+
+
 
