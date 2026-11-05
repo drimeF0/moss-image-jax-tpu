@@ -411,8 +411,7 @@ def strip_text_encoder_key(key: str):
 def load_state_dict_from_safetensors(paths):
     from safetensors import safe_open
 
-    if isinstance(paths, str):
-        paths = [paths]
+    paths = weights_mod.resolve_shard_paths(paths)
     sd = {}
     for path in paths:
         with safe_open(str(path), framework="np") as handle:
@@ -426,8 +425,7 @@ def load_state_dict_from_safetensors(paths):
 def load_params(paths, cfg: TextConfig, dtype=None, quantize_int8: bool = False):
     from safetensors import safe_open
 
-    if isinstance(paths, str):
-        paths = [paths]
+    paths = weights_mod.resolve_shard_paths(paths)
     metadata = weights_mod.read_safetensors_metadata(paths)
     act_dtype = quant.dtype_from_name(metadata.get(quant.META_ACT_DTYPE)) if metadata else None
     expected = param_shapes(cfg)

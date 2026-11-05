@@ -14,8 +14,8 @@ from mossjax import prepare, quant
 from mossjax import text_encoder as jte
 from mossjax import weights as jw
 
-from helpers import CFG, _torch_model
-from test_text_encoder import CFG as TE_CFG, _torch_model as _te_torch_model
+from helpers import CFG, _params, _torch_model
+from test_text_encoder import CFG as TE_CFG, _params as _te_params, _torch_model as _te_torch_model
 
 
 def _save_dit(tmp_path, name="dit.safetensors"):
@@ -199,3 +199,32 @@ def test_cache_progress_can_be_disabled(capsys, tmp_path, monkeypatch):
         progress=False,
     )
     assert capsys.readouterr().out == ""
+
+
+def _split_shards(sd, tmp_path, name):
+    keys = sorted(sd)
+    half = len(keys) // 2
+    first = tmp_path / f"{name}-00001-of-00002.safetensors"
+    second = tmp_path / f"{name}-00002-of-00002.safetensors"
+    torch_save_file({key: sd[key] for key in keys[:half]}, str(first))
+    torch_save_file({key: sd[key] for key in keys[half:]}, str(second))
+    return first
+
+
+def test_dit_load_resolves_first_shard(tmp_path):
+    model = _torch_model()
+    sd = {f"model.diffusion_model.{key}": value for key, value in model.state_dict().items()}
+    first = _split_shards(sd, tmp_path, "diffusion_pytorch_model")
+    loaded = jw.load_params(str(first), CFG)
+    _assert_trees_equal(loaded, _params(model))
+
+    globbed = jw.load_params(str(tmp_path / "diffusion_pytorch_model-*.safetensors"), CFG)
+    _assert_trees_equal(globbed, _params(model))
+
+
+def test_te_load_resolves_first_shard(tmp_path):
+    model = _te_torch_model()
+    sd = {f"model.language_model.{key}": value for key, value in model.state_dict().items()}
+    first = _split_shards(sd, tmp_path, "model")
+    loaded = jte.load_params(str(first), TE_CFG)
+    _assert_trees_equal(loaded, _te_params(model))

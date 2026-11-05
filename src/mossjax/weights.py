@@ -1,5 +1,8 @@
 from typing import Dict
 
+import glob
+import os
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -228,11 +231,23 @@ def cast_tree(params, dtype):
     )
 
 
+def resolve_shard_paths(paths):
+    if isinstance(paths, (list, tuple)):
+        resolved = []
+        for path in paths:
+            resolved.extend(resolve_shard_paths(path))
+        return resolved
+    if str(paths).endswith(".safetensors") and glob.has_magic(paths):
+        return sorted(glob.glob(paths))
+    if os.path.basename(str(paths)).endswith(".safetensors") and "-00001-of-" in os.path.basename(str(paths)):
+        return sorted(glob.glob(os.path.join(os.path.dirname(str(paths)), "*.safetensors")))
+    return [paths]
+
+
 def load_state_dict_from_safetensors(paths, disable_mmap: bool = False):
     from safetensors import safe_open
 
-    if isinstance(paths, str):
-        paths = [paths]
+    paths = resolve_shard_paths(paths)
     sd = {}
     for path in paths:
         with safe_open(str(path), framework="np") as handle:
@@ -244,8 +259,7 @@ def load_state_dict_from_safetensors(paths, disable_mmap: bool = False):
 def read_safetensors_metadata(paths):
     from safetensors import safe_open
 
-    if isinstance(paths, str):
-        paths = [paths]
+    paths = resolve_shard_paths(paths)
     metadata = {}
     for path in paths:
         with safe_open(str(path), framework="np") as handle:
@@ -268,8 +282,7 @@ def _convert_leaf(key, array, prepared_scale, quantize, act_dtype):
 def load_params(paths, cfg: MossConfig, dtype=None, quantize_int8: bool = False):
     from safetensors import safe_open
 
-    if isinstance(paths, str):
-        paths = [paths]
+    paths = resolve_shard_paths(paths)
     metadata = read_safetensors_metadata(paths)
     act_dtype = quant.dtype_from_name(metadata.get(quant.META_ACT_DTYPE)) if metadata else None
     expected = param_shapes(cfg)

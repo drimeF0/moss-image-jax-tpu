@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import numpy as np
 from PIL import Image
 
-from mossjax import caching, lora as lora_mod, quant, sampling, text_encoder as te_mod, vae as vae_mod
+from mossjax import caching, lora as lora_mod, sampling, text_encoder as te_mod, vae as vae_mod
 from mossjax import weights
 from mossjax.config import MOSS_IMAGE_CONFIG
 
@@ -52,9 +52,7 @@ def format_prompt(prompt):
 
 def main():
     args = parse_args()
-    params = weights.load_params(resolve_shards(args.dit), MOSS_IMAGE_CONFIG)
-    if args.int8:
-        params = quant.quantize_params(params, MOSS_IMAGE_CONFIG)
+    params = weights.load_params(resolve_shards(args.dit), MOSS_IMAGE_CONFIG, quantize_int8=args.int8)
     lora_tree = None
     if args.lora:
         lora_tree = lora_mod.load_lora_file(args.lora, params, MOSS_IMAGE_CONFIG)
@@ -66,9 +64,7 @@ def main():
             "tests", "reference", "kohya_sd_scripts", "configs", "moss_image_qwen35_9b", "config.json",
         )
     te_cfg = te_mod.load_config(config_path)
-    te_params = te_mod.load_params([args.text_encoder], te_cfg)
-    if args.int8:
-        te_params = quant.quantize_text_encoder_params(te_params)
+    te_params = te_mod.load_params(resolve_shards(args.text_encoder), te_cfg, quantize_int8=args.int8)
 
     from transformers import AutoTokenizer
 
