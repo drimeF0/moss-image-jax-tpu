@@ -4,12 +4,23 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+from . import quant
 from .config import MOSS_IMAGE_CONFIG, MossConfig
 
 PRECISION = lax.Precision.HIGHEST
 
 
+def weight_dtype(weight):
+    if isinstance(weight, dict):
+        return weight["act_dtype"].dtype
+    return weight.dtype
+
+
 def linear(x, weight, bias=None):
+    if isinstance(weight, dict):
+        if bias is not None:
+            raise ValueError("quantized linear layers carry their own bias")
+        return quant.weight_only_linear(x, weight)
     y = jnp.einsum("...i,oi->...o", x, weight, precision=PRECISION)
     if bias is not None:
         y = y + bias
@@ -110,7 +121,8 @@ def main_block(x, rope, modulation, params, key_mask, cfg):
     k = apply_rope(k, rope).astype(v.dtype)
 
     attn = attention(q, k, v, key_mask)
-    x = x + linear(attn.astype(params["proj"]["o"]["weight"].dtype), params["proj"]["o"]["weight"]) * gate_a
+    o = params["proj"]["o"]["weight"]
+    x = x + linear(attn.astype(weight_dtype(o)), o) * gate_a
 
     y = rms_norm(x, params["norm2"]["weight"])
     y = (y * (1 + scale_f) + shift_f).astype(norm_dtype)
