@@ -30,6 +30,10 @@ class LoopConfig:
     checkpoint_metadata: dict = field(default_factory=dict)
 
 
+def _flush_print(message):
+    print(message, flush=True)
+
+
 def train_loop(
     params,
     cfg: MossConfig,
@@ -39,7 +43,7 @@ def train_loop(
     bucket_reso,
     output_dir=None,
     vae_stats=None,
-    log_fn=print,
+    log_fn=_flush_print,
 ):
     dataset = CachedDataset(records, bucket_reso, seed=loop_config.seed + 1, vae_stats=vae_stats)
     state, optimizer = trainer.init_train_state(params, cfg, train_config, jax.random.PRNGKey(loop_config.seed))

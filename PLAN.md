@@ -148,7 +148,8 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
   отдельные linear/full слои, вход без паддинга, per-sample.
 - int8 (`quant.quantize_text_encoder_params`): проекции + `embed_tokens`,
   как upstream (in_proj_a/b — native); cos > 0.9999 к fp32.
-- Кэш: `caching.write_te_cache` → `*_moss_te.npz` 1:1 с upstream.
+- Кэш: `caching.write_te_cache` → `*_moss_te.npz` 1:1 с upstream;
+  `build_caches_from_images` печатает живой прогресс по картинкам (латент/TE, elapsed, ETA).
 - Осталось: стриминг весов TE с host RAM для 16 ГБ (по слоям),
   опционально chunked-вариант delta rule.
 

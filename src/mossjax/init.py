@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 
 import jax
@@ -26,6 +28,6 @@ def init_tree(shapes, rng, list_containers, dtype=jnp.float32):
             value = jnp.ones(shape, dtype)
         else:
             fan_in = int(np.prod(shape[1:])) if len(shape) > 1 else shape[0]
-            value = jax.random.normal(sub, shape, dtype=dtype) * (1.0 / np.sqrt(max(fan_in, 1)))
+            value = jax.random.normal(sub, shape, dtype=dtype) * (1.0 / math.sqrt(max(fan_in, 1)))
         flat[key] = value
     return weights_mod.unflatten_flat(flat, list_containers)

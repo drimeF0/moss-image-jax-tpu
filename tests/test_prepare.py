@@ -133,3 +133,69 @@ def test_prepare_cli(tmp_path):
     assert (tmp_path / "prepared" / "tiny_dit_int8.safetensors").exists()
     summary = json.loads((tmp_path / "prepared" / "prepare_summary.json").read_text())
     assert summary["dit"]["quantized_keys"] == CFG.num_layers * 6
+
+
+def test_cache_progress_reporting(capsys, tmp_path, monkeypatch):
+    from PIL import Image
+
+    from mossjax import caching
+
+    monkeypatch.setattr(caching, "write_latents_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(caching, "write_te_cache", lambda *args, **kwargs: None)
+
+    class Tokenizer:
+        def __call__(self, text):
+            return {"input_ids": list(range(10))}
+
+    prompts = {"a.png": ["one"], "b.png": ["two captions", "second"]}
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    rng = np.random.default_rng(0)
+    for name in prompts:
+        Image.fromarray((rng.random((32, 32, 3)) * 255).astype("uint8")).save(images_dir / name)
+
+    cached = caching.build_caches_from_images(
+        str(images_dir),
+        prompts,
+        None,
+        None,
+        None,
+        None,
+        Tokenizer(),
+        str(tmp_path / "cache"),
+    )
+    out = capsys.readouterr().out
+    assert len(cached) == 2
+    assert "[cache 1/2] a.png" in out
+    assert "[cache 2/2] b.png" in out
+    assert "eta" in out
+    assert "[cache] done: 2 images" in out
+
+
+def test_cache_progress_can_be_disabled(capsys, tmp_path, monkeypatch):
+    from PIL import Image
+
+    from mossjax import caching
+
+    monkeypatch.setattr(caching, "write_latents_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(caching, "write_te_cache", lambda *args, **kwargs: None)
+
+    class Tokenizer:
+        def __call__(self, text):
+            return {"input_ids": list(range(4))}
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    Image.fromarray(np.zeros((32, 32, 3), dtype="uint8")).save(images_dir / "a.png")
+    caching.build_caches_from_images(
+        str(images_dir),
+        {"a.png": ["one"]},
+        None,
+        None,
+        None,
+        None,
+        Tokenizer(),
+        str(tmp_path / "cache"),
+        progress=False,
+    )
+    assert capsys.readouterr().out == ""

@@ -70,8 +70,11 @@ def build_caches_from_images(
     bucket_steps: int = 64,
     caption_dropout_rate: float = 0.0,
     max_samples: Optional[int] = None,
+    progress: bool = True,
+    log_every: int = 1,
 ):
     import os
+    import time
 
     from PIL import Image
 
@@ -81,8 +84,13 @@ def build_caches_from_images(
     manager = buckets.BucketManager(False, tuple(max_resolution), 256, max(max_resolution), bucket_steps)
     manager.make_buckets()
     uncond_ids = tokenize_prompt(tokenizer, "")
+    items = list(prompts.items())
+    if max_samples is not None:
+        items = items[:max_samples]
+    total_started = time.time()
     cached = []
-    for name, captions in prompts.items():
+    for index, (name, captions) in enumerate(items):
+        image_started = time.time()
         image_path = os.path.join(images_dir, name)
         image = Image.open(image_path).convert("RGB")
         reso, resized_size, _ = manager.select_bucket(*image.size)
@@ -97,12 +105,27 @@ def build_caches_from_images(
             os.makedirs(parent, exist_ok=True)
         latents_path = stem + f"_{width:04d}x{height:04d}_moss.npz"
         write_latents_cache(latents_path, vae_params, vae_cfg, pixels, original_size=[width, height])
+        latents_done = time.time()
+
         te_path = stem + "_moss_te.npz"
         caption_ids = [tokenize_prompt(tokenizer, caption) for caption in captions]
         write_te_cache(
             te_path, te_params, te_cfg, caption_ids, captions, uncond_ids, caption_dropout_rate=caption_dropout_rate
         )
+        te_done = time.time()
         cached.append(name)
-        if max_samples is not None and len(cached) >= max_samples:
-            break
+
+        if progress and ((index + 1) % max(log_every, 1) == 0 or index == len(items) - 1):
+            elapsed = te_done - total_started
+            eta = elapsed / (index + 1) * (len(items) - index - 1)
+            print(
+                f"[cache {index + 1}/{len(items)}] {name}: latents {latents_done - image_started:.1f}s, "
+                f"te {te_done - latents_done:.1f}s, elapsed {elapsed:.0f}s, eta {eta:.0f}s",
+                flush=True,
+            )
+    if progress and items:
+        print(
+            f"[cache] done: {len(cached)} images in {time.time() - total_started:.0f}s -> {output_dir}",
+            flush=True,
+        )
     return cached
