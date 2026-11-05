@@ -28,23 +28,29 @@ def _suffix_name(suffix: str) -> str:
     return suffix.split(".")[1]
 
 
+def _weight_shape(leaf):
+    if isinstance(leaf, dict):
+        return tuple(leaf["int8"].shape)
+    return tuple(leaf.shape)
+
+
 def init_lora(params, cfg: MossConfig, rank: int = 4, alpha=None, rng=None, dtype=jnp.float32):
     if alpha is None:
         alpha = float(rank)
     if rng is None:
         rng = jax.random.PRNGKey(0)
     scale = jnp.asarray(float(alpha) / rank, dtype=dtype)
-    flat = weights_mod.flatten_tree(params)
     layers = []
     for index in range(cfg.num_layers):
         projections = {}
         for target_index, suffix in enumerate(TARGET_SUFFIXES):
-            out_dim, in_dim = flat[f"layers.{index}.{suffix}.weight"].shape
+            name = _suffix_name(suffix)
+            out_dim, in_dim = _weight_shape(params["layers"][index]["proj"][name]["weight"])
             key = jax.random.fold_in(rng, index * len(TARGET_SUFFIXES) + target_index)
             bound = 1.0 / math.sqrt(in_dim)
             down = jax.random.uniform(key, (rank, in_dim), minval=-bound, maxval=bound, dtype=dtype)
             up = jnp.zeros((out_dim, rank), dtype=dtype)
-            projections[_suffix_name(suffix)] = {"A": down, "B": up, "scale": scale}
+            projections[name] = {"A": down, "B": up, "scale": scale}
         layers.append({"proj": projections})
     return {"layers": layers}
 
@@ -71,6 +77,24 @@ def export_metadata(dim, alpha, module: str = "networks.lora_generic"):
         "ss_network_dim": str(dim),
         "ss_network_alpha": str(alpha),
     }
+
+
+def save_lora_file(path, lora, cfg: MossConfig, dim, alpha, metadata=None, dtype=np.float32):
+    from safetensors.numpy import save_file
+
+    flat = export_lora(lora, cfg, dim, alpha, dtype)
+    header = export_metadata(dim, alpha)
+    if metadata is not None:
+        header.update({str(key): str(value) for key, value in metadata.items()})
+    save_file(flat, str(path), metadata=header)
+
+
+def load_lora_file(path, params, cfg: MossConfig, dtype=np.float32):
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="np") as handle:
+        sd = {key: handle.get_tensor(key) for key in handle.keys()}
+    return import_lora(sd, params, cfg, dtype)
 
 
 def import_lora(sd: Dict[str, np.ndarray], params, cfg: MossConfig, dtype=jnp.float32):

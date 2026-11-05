@@ -176,7 +176,14 @@ def text_embedder(context, rope_text, context_mask, params, cfg):
     return x
 
 
-def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CONFIG, skip_layers=(), lora=None):
+def make_checkpointed_block(cfg):
+    def call(x, rope, modulation, block_params, key_mask, lora_block):
+        return main_block(x, rope, modulation, block_params, key_mask, cfg, lora_block)
+
+    return jax.checkpoint(call)
+
+
+def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CONFIG, skip_layers=(), lora=None, remat=False):
     batch, channels, height, width = x.shape
     num_img = height * width
     text_length = context.shape[1]
@@ -199,11 +206,15 @@ def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CON
     key_mask = jnp.concatenate(
         (jnp.ones((batch, num_img), dtype=jnp.bool_), context_mask.astype(jnp.bool_)), axis=1
     )
+    block_fn = make_checkpointed_block(cfg) if remat else None
     for index, block in enumerate(params["layers"]):
         if index in skip:
             continue
         lora_block = None if lora is None else lora["layers"][index]
-        hidden = main_block(hidden, rope, mod, block, key_mask, cfg, lora_block)
+        if remat:
+            hidden = block_fn(hidden, rope, mod, block, key_mask, lora_block)
+        else:
+            hidden = main_block(hidden, rope, mod, block, key_mask, cfg, lora_block)
 
     hidden = hidden[:, :num_img]
     fnw = params["final_norm_video"]["weight"]

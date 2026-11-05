@@ -20,7 +20,7 @@
 - Готово: DiT forward (паритет fp32 2.4e-7), int8-база (weight-only/MXU),
   FLUX.2 VAE (encode/decode/patchify), LoRA с полной совместимостью файлов
   (roundtrip через upstream `networks.lora_generic`).
-- В работе: Qwen3.5-9B TE, дата-пайплайн и тренер, TPU v5e-1 прогон.
+- В работе: TE-прогон на TPU (int8/кэш), .toml-датасет, полный цикл тренера, прогон на v5e-1.
 - Ссылочный torch-код зафиксирован в `tests/reference/kohya_sd_scripts/`.
 
 ## Тесты

@@ -67,3 +67,31 @@ N = H/16·W/16; последовательность `[image, text]`; image-upst
   В upstream версия transformers зафиксирована 5.12.1; локальный паритет
   проверяется на установленной версии (5.22.0), см. PLAN §7.
 
+### FIXES #10. Rectified flow (обучение)
+- `noisy = (1 − σ)·x0 + σ·noise`, target `v = noise − x0`; `timesteps = σ·1000`
+  (в DiT передаются как есть, без деления).
+- σ-сэмплинг: `uniform`, `sigmoid` (`σ=sigmoid(scale·r)`, `r~N(0,1)`),
+  `shift` (`σ` из sigmoid, затем `σ·shift/(1+(shift−1)σ)`), `flux_shift`
+  (`time_shift(mu,1,σ)`, `mu = lin(256,0.5,4096,1.15)((h//2)(w//2))`),
+  `truncated_logit_normal` (претрейн MOSS): `Z ~ N(logit_mean + offset, logit_std)`,
+  `S = sigmoid(−Z)/cutoff`, индекс на убывающей сетке `T − ceil(S·T)`,
+  с вероятностью `uniform_ratio` — равномерный индекс.
+- Сетка планировщика: `u = linspace(1, T, T)[::-1]`, `σ = shift·u/(1+(shift−1)u)`,
+  `timesteps = σ·T`.
+- Лосс: поэлементный MSE (или huber), `mean` по всем осям кроме батча,
+  умножение на per-sample weighting (для `logit_normal` = 1), затем `mean` по
+  батчу. Реализация — `losses.rectified_flow_loss`.
+- Оффсет применяется только при обучении (валидация без оффсета).
+
+### FIXES #11. Формат кэшей (для полного TPU-пайплайна)
+- Латенты: `<stem>_<W:04d>x<H:04d>_moss.npz`, ключ `latents_{H/8}x{W/8}`
+  (raw [32, H/8, W/8], float32), плюс `original_size_*`, `crop_ltrb_*`,
+  опционально `latents_flipped_*`, `alpha_mask_*`.
+- TE-выходы: `<stem>_moss_te.npz`, ключи `num_candidates`, `prompt_embeds_{k}`
+  (uint16 = bf16-биты, обрезано по валидной длине), `attn_mask_{k}`,
+  `caption_{k}`, `uncond_embeds`/`uncond_mask`, `caption_dropout_rate`.
+  Старый формат (0.12.1) — `prompt_embeds`/`attn_mask` без кандидатов.
+- bf16-преобразование — round-to-nearest-even (проверено против torch,
+  включая tie-случаи).
+
+

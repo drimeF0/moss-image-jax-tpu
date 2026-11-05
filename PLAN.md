@@ -110,10 +110,11 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 
 ## 5. Фазы
 
-Статус: Ф0 ✅ · Ф1 ✅ · Ф2 ⏳ (int8 слоя DiT сделан; лоадер реальных шардов ждёт файлов) ·
+Статус: Ф0 ✅ · Ф1 ✅ · Ф2 ⏳ (int8 DiT сделан; лоадер реальных шардов ждёт файлов) ·
 Ф3 ⏳ (forward TE с паритетом; int8/кэширование/стриминг — дальше) ·
-Ф4 ✅ · Ф6 ⏳ (ядро LoRA и интероп сделаны; per-module dims/lr, EMA — позже) ·
-Ф5, Ф7, Ф8 — запланированы.
+Ф4 ✅ · Ф5 ✅ (бакеты и кэши; .toml-конфиг датасета — дальше) ·
+Ф6 ✅ · Ф7 ⏳ (лосс/сэмплинг/шаг/toy — сделано; лог/валидация/чекпойнты/датасет-цикл — дальше) ·
+Ф8 — запланирована.
 
 ### Ф0. Инфраструктура (сделано)
 - Репо, pyproject, .gitignore, вендоринг reference `tests/reference/kohya_sd_scripts/`.
@@ -156,29 +157,34 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 - Паритет: encode 1e-5, decode 5e-5 (fp32, tiny-конфиг), diffusers-конвертация
   бит-в-бит, roundtrip safetensors.
 
-### Ф5. Данные
-- Bucket manager (кратно 16), `.toml` датасета, `enable_multiline_caption`.
-- Чтение/запись npz-кэшей upstream 1:1; padding/text-length как трассируемые
-  скаляры + маски, статические бакеты форм (без рекомпиляций).
-- caption dropout + выбор кандидата per-step.
+### Ф5. Данные (сделано ядро)
+- `src/mossjax/data/buckets.py` — `make_bucket_resolutions` и `BucketManager`
+  (оба режима: с апскейлом и `no_upscale`), паритет с upstream по значениям.
+- `src/mossjax/data/cache.py` — чтение/запись `*_moss.npz` и
+  `*_moss_te.npz` ровно в формате upstream (включая старый TE-формат),
+  bf16 RNE биты, `pad_embeds`, выбор кандидата, поиск пар кэшей.
+- Осталось: парсер `.toml` датасета (subsets, metadata.json, caption dropout,
+  multiline), итератор бакетов, flip/alpha-маска.
 
-### Ф6. LoRA и совместимость (ядро сделано)
+### Ф6. LoRA и совместимость (сделано)
 - `src/mossjax/lora.py`: kohya-раскладка `lora_unet_layers_N_proj_*`
-  (`lora_down.weight`, `lora_up.weight`, `alpha`), init/export/import/merge.
+  (`lora_down.weight`, `lora_up.weight`, `alpha`), init/export/import/merge,
+  файловый I/O (`save_lora_file` с metadata/`load_lora_file`).
 - `model.forward(..., lora=...)`: LoRA-ветка bf16 поверх int8-базы.
 - Roundtrip: наш safetensors грузится в upstream `networks.lora_generic`
   (strict), значения/alpha совпадают, форвард патченного torch == JAX (1e-5).
-- Осталось: per-module `network_reg_dims`/`network_reg_lrs`, LoRA+, EMA,
-  резюмируемые чекпойнты.
+- Осталось: per-module `network_reg_dims`/`network_reg_lrs`, LoRA+.
 
-### Ф7. Тренер
-- Rectified-flow loss, t-sampling (sigma/uniform/sigmoid/shift/flux_shift/
-  truncated_logit_normal), offset/weighting — по
-  `library/moss_image_train_utils.py`.
-- optax AdamW/Adafactor, grad clip, grad accumulation, LR scheduler, EMA?
-- `jax.checkpoint` (remat) на блоки; int8 base + bf16 LoRA; masked loss.
-- Валидация: euler + CFG + skip layers; лог в upstream-формате.
-- Чекпойнты: safetensors LoRA (для интеропа) + orbax resume.
+### Ф7. Тренер (ядро сделано)
+- `src/mossjax/losses.py`: все режимы t-sampling (включая
+  `truncated_logit_normal` с паритетом к upstream), сетка планировщика,
+  weighting, rectified-flow лосс (reduction 1:1).
+- `src/mossjax/trainer.py`: optax AdamW + clip, `train_step` (grad только по
+  LoRA, база заморожена), remat блоков в `model.forward`.
+- Тесты: toy-обучение уменьшает лосс (fp32 и int8-база), remat == plain,
+  файловый roundtrip LoRA.
+- Осталось: цикл по датасету, grad accumulation, валидация/сэмплинг, лог
+  upstream-формата, чекпойнты (orbax + LoRA-файлы), resume.
 
 ### Ф8. TPU v5e-1 и приёмка
 - Smoke на реальном чекпойнте int8; memory_analysis бюджета; attention:
