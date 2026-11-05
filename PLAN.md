@@ -110,10 +110,10 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 
 ## 5. Фазы
 
-Статус: Ф0 ✅ · Ф1 ✅ · Ф2 ⏳ (int8 DiT сделан; лоадер реальных шардов ждёт файлов) ·
-Ф3 ⏳ (forward TE с паритетом; int8/кэширование/стриминг — дальше) ·
-Ф4 ✅ · Ф5 ✅ (бакеты и кэши; .toml-конфиг датасета — дальше) ·
-Ф6 ✅ · Ф7 ⏳ (лосс/сэмплинг/шаг/toy — сделано; лог/валидация/чекпойнты/датасет-цикл — дальше) ·
+Статус: Ф0 ✅ · Ф1 ✅ · Ф2 ⏳ (int8 DiT+TE, лоадер реальных шардов ждёт файлов) ·
+Ф3 ✅ (forward+int8+кэш TE; стриминг весов с host RAM — дальше) ·
+Ф4 ✅ · Ф5 ✅ (бакеты/кэши/датасет; .toml — дальше) · Ф6 ✅ ·
+Ф7 ✅ (лосс/шаг/E2E-цикл/чекпойнты LoRA; grad accumulation, валидация, orbax, лог-совместимость — дальше) ·
 Ф8 — запланирована.
 
 ### Ф0. Инфраструктура (сделано)
@@ -140,15 +140,17 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 - Осталось: smoke на реальном чекпойнте (первый шард), HLO-проверка s8×s8→s32
   на v5e, custom_vjp int8-fwd/bf16-bwd (перф, не память).
 
-### Ф3. Qwen3.5-9B TE (24 Gated DeltaNet + 8 full attn) — forward готов
+### Ф3. Qwen3.5-9B TE (готов, кроме стриминга)
 - `src/mossjax/text_encoder.py`: embeddings, zero-centered RMSNorm,
   GatedDeltaNet (conv1d + recurrent gated delta rule, fp32 state), full attention
   (GQA, partial RoPE, q-gate), MLP, `config_from_hf`/`load_config`.
 - Паритет с `transformers.Qwen3_5TextModel` (eager, CPU): полный forward и
   отдельные linear/full слои, вход без паддинга, per-sample.
-- Осталось: запуск TE-прохода на TPU с int8 (проекции + embed_tokens),
-  кэширование выходов в `*_moss_te.npz`, стриминг весов с host RAM;
-  опционально chunked-вариант delta rule (сейчас O(L)-scan).
+- int8 (`quant.quantize_text_encoder_params`): проекции + `embed_tokens`,
+  как upstream (in_proj_a/b — native); cos > 0.9999 к fp32.
+- Кэш: `caching.write_te_cache` → `*_moss_te.npz` 1:1 с upstream.
+- Осталось: стриминг весов TE с host RAM для 16 ГБ (по слоям),
+  опционально chunked-вариант delta rule.
 
 ### Ф4. FLUX.2 VAE (сделано)
 - `src/mossjax/vae.py`: NCHW-порт encoder/decoder (GroupNorm, Resnet, Attention,
@@ -181,10 +183,15 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
   weighting, rectified-flow лосс (reduction 1:1).
 - `src/mossjax/trainer.py`: optax AdamW + clip, `train_step` (grad только по
   LoRA, база заморожена), remat блоков в `model.forward`.
-- Тесты: toy-обучение уменьшает лосс (fp32 и int8-база), remat == plain,
-  файловый roundtrip LoRA.
-- Осталось: цикл по датасету, grad accumulation, валидация/сэмплинг, лог
-  upstream-формата, чекпойнты (orbax + LoRA-файлы), resume.
+- `src/mossjax/train.py`: `train_loop` по `CachedDataset` (кандидаты капшенов,
+  caption dropout, паддинг текста до бакетов 128..4096), лог loss/current,
+  чекпойнты LoRA каждые N шагов + финальный файл.
+- `caching.py`: VAE-кэш латентов и TE-кэш (train-time нормализация из
+  `bn.running_*`).
+- E2E-тест: картинки → VAE-кэш → TE-кэш → обучение → LoRA-файл грузится в
+  upstream `networks.lora_generic` (strict) и форвардит.
+- Осталось: grad accumulation, валидация/сэмплинг, orbax/resume, лог по
+  upstream-формату, `.toml`-датасет, реальные чекпойнты на v5e-1.
 
 ### Ф8. TPU v5e-1 и приёмка
 - Smoke на реальном чекпойнте int8; memory_analysis бюджета; attention:

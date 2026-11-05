@@ -12,6 +12,7 @@ from .cache import (
     select_candidate,
     uint16_to_float32,
 )
+from .dataset import TEXT_LENGTH_BUCKETS, CachedDataset, pad_text_length
 
 __all__ = [
     "BucketManager",
@@ -27,4 +28,7 @@ __all__ = [
     "save_te_outputs",
     "select_candidate",
     "uint16_to_float32",
+    "TEXT_LENGTH_BUCKETS",
+    "CachedDataset",
+    "pad_text_length",
 ]

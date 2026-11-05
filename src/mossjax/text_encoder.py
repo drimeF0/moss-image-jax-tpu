@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+from . import quant
 from . import weights as weights_mod
 from .quant import PRECISION
 
@@ -81,6 +82,22 @@ def config_from_hf(config_dict: Dict) -> TextConfig:
     )
 
 
+def _linear(x, weight):
+    if isinstance(weight, dict):
+        return quant.weight_only_linear(x, weight)
+    return jnp.einsum("...i,oi->...o", x, weight, precision=PRECISION)
+
+
+def embedding_lookup(params, input_ids):
+    weight = params["embed_tokens"]["weight"]
+    if isinstance(weight, dict):
+        rows = jnp.take(weight["int8"], input_ids, axis=0).astype(jnp.float32)
+        scale = jnp.take(weight["scale"], input_ids, axis=0)
+        y = rows * scale[..., None]
+        return y.astype(weight["act_dtype"].dtype)
+    return jnp.take(weight, input_ids, axis=0)
+
+
 def rms_norm_zero_centered(x, weight, eps):
     xf = x.astype(jnp.float32)
     y = xf * lax.rsqrt(jnp.mean(jnp.square(xf), axis=-1, keepdims=True) + eps)
@@ -132,15 +149,15 @@ def causal_bias(length, dtype):
 
 def full_attention(x, params, cos, sin, cfg: TextConfig):
     batch, length, _ = x.shape
-    q_gate = jnp.einsum("...i,oi->...o", x, params["q_proj"]["weight"], precision=PRECISION).reshape(
+    q_gate = _linear(x, params["q_proj"]["weight"]).reshape(
         batch, length, cfg.num_attention_heads, 2 * cfg.head_dim
     )
     q, gate = q_gate[..., : cfg.head_dim], q_gate[..., cfg.head_dim :]
     gate = gate.reshape(batch, length, cfg.num_attention_heads * cfg.head_dim)
-    k = jnp.einsum("...i,oi->...o", x, params["k_proj"]["weight"], precision=PRECISION).reshape(
+    k = _linear(x, params["k_proj"]["weight"]).reshape(
         batch, length, cfg.num_key_value_heads, cfg.head_dim
     )
-    v = jnp.einsum("...i,oi->...o", x, params["v_proj"]["weight"], precision=PRECISION).reshape(
+    v = _linear(x, params["v_proj"]["weight"]).reshape(
         batch, length, cfg.num_key_value_heads, cfg.head_dim
     )
     q = rms_norm_zero_centered(q, params["q_norm"]["weight"], cfg.rms_norm_eps)
@@ -161,7 +178,7 @@ def full_attention(x, params, cos, sin, cfg: TextConfig):
     out = jnp.einsum("bhlk,bhkd->bhld", probs, v, precision=PRECISION)
     out = jnp.transpose(out, (0, 2, 1, 3)).reshape(batch, length, cfg.num_attention_heads * cfg.head_dim)
     out = out * jax.nn.sigmoid(gate)
-    return jnp.einsum("...i,oi->...o", out, params["o_proj"]["weight"], precision=PRECISION)
+    return _linear(out, params["o_proj"]["weight"])
 
 
 def recurrent_gated_delta_rule(query, key, value, g, beta, cfg: TextConfig):
@@ -192,7 +209,7 @@ def recurrent_gated_delta_rule(query, key, value, g, beta, cfg: TextConfig):
 
 def gated_delta_net(x, params, cfg: TextConfig):
     batch, length, _ = x.shape
-    mixed = jnp.einsum("...i,oi->...o", x, params["in_proj_qkv"]["weight"], precision=PRECISION)
+    mixed = _linear(x, params["in_proj_qkv"]["weight"])
     mixed = jnp.transpose(mixed, (0, 2, 1))
     pad = cfg.linear_conv_kernel_dim - 1
     mixed = jnp.pad(mixed, ((0, 0), (0, 0), (pad, 0)))
@@ -213,8 +230,8 @@ def gated_delta_net(x, params, cfg: TextConfig):
     key = key.reshape(batch, length, cfg.linear_num_key_heads, cfg.linear_key_head_dim)
     value = value.reshape(batch, length, cfg.linear_num_value_heads, cfg.linear_value_head_dim)
 
-    b = jnp.einsum("...i,oi->...o", x, params["in_proj_b"]["weight"], precision=PRECISION)
-    a = jnp.einsum("...i,oi->...o", x, params["in_proj_a"]["weight"], precision=PRECISION)
+    b = _linear(x, params["in_proj_b"]["weight"])
+    a = _linear(x, params["in_proj_a"]["weight"])
     beta = jax.nn.sigmoid(b)
     g = -jnp.exp(params["A_log"].astype(jnp.float32)) * jax.nn.softplus(a.astype(jnp.float32) + params["dt_bias"])
     repeat = cfg.linear_num_value_heads // cfg.linear_num_key_heads
@@ -223,19 +240,19 @@ def gated_delta_net(x, params, cfg: TextConfig):
         key = jnp.repeat(key, repeat, axis=2)
 
     core = recurrent_gated_delta_rule(query, key, value, g, beta, cfg)
-    z = jnp.einsum("...i,oi->...o", x, params["in_proj_z"]["weight"], precision=PRECISION).reshape(
+    z = _linear(x, params["in_proj_z"]["weight"]).reshape(
         batch, length, cfg.linear_num_value_heads, cfg.linear_value_head_dim
     )
     core = rms_norm_gated(core.reshape(-1, cfg.linear_value_head_dim), z.reshape(-1, cfg.linear_value_head_dim), params["norm"]["weight"], cfg.rms_norm_eps)
     core = core.reshape(batch, length, cfg.value_dim)
-    return jnp.einsum("...i,oi->...o", core, params["out_proj"]["weight"], precision=PRECISION)
+    return _linear(core, params["out_proj"]["weight"])
 
 
 def mlp(x, params, cfg: TextConfig):
-    gate = jnp.einsum("...i,oi->...o", x, params["gate_proj"]["weight"], precision=PRECISION)
-    up = jnp.einsum("...i,oi->...o", x, params["up_proj"]["weight"], precision=PRECISION)
+    gate = _linear(x, params["gate_proj"]["weight"])
+    up = _linear(x, params["up_proj"]["weight"])
     hidden = jax.nn.silu(gate) * up
-    return jnp.einsum("...i,oi->...o", hidden, params["down_proj"]["weight"], precision=PRECISION)
+    return _linear(hidden, params["down_proj"]["weight"])
 
 
 def decoder_layer(x, params, cos, sin, cfg: TextConfig, layer_index):
@@ -259,7 +276,7 @@ def forward(params, input_ids, cfg: TextConfig, position_ids=None):
     if position_ids is None:
         position_ids = jnp.broadcast_to(jnp.arange(length), (batch, length))
     cos, sin = rope_cos_sin(position_ids, cfg)
-    x = jnp.take(params["embed_tokens"]["weight"], input_ids, axis=0)
+    x = embedding_lookup(params, input_ids)
     for index, layer in enumerate(params["layers"]):
         x = decoder_layer(x, layer, cos, sin, cfg, index)
     return rms_norm_zero_centered(x, params["norm"]["weight"], cfg.rms_norm_eps)

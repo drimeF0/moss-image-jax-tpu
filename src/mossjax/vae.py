@@ -251,8 +251,9 @@ def param_shapes(cfg: VaeConfig):
     _add_conv(shapes, "decoder.conv_out", cfg.out_channels, block_in)
     _add_conv(shapes, "decoder.post_quant_conv", cfg.z_channels, cfg.z_channels, kernel=1)
 
-    shapes["bn.running_mean"] = (PATCHIFIED_LATENT_CHANNELS,)
-    shapes["bn.running_var"] = (PATCHIFIED_LATENT_CHANNELS,)
+    bn_channels = cfg.z_channels * PATCH_SIZE * PATCH_SIZE
+    shapes["bn.running_mean"] = (bn_channels,)
+    shapes["bn.running_var"] = (bn_channels,)
     return shapes
 
 

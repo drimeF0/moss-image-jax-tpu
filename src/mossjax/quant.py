@@ -81,5 +81,31 @@ def quantize_params(params, cfg):
     return out
 
 
+def quantize_text_encoder_params(params):
+    out = dict(params)
+    out["embed_tokens"] = {"weight": quantize_linear_layer(params["embed_tokens"]["weight"])}
+    layers = []
+    for layer in params["layers"]:
+        new_layer = dict(layer)
+        if "mlp" in layer:
+            new_layer["mlp"] = {
+                name: {"weight": quantize_linear_layer(layer["mlp"][name]["weight"])}
+                for name in ("gate_proj", "up_proj", "down_proj")
+            }
+        if "self_attn" in layer:
+            attention = dict(layer["self_attn"])
+            for name in ("q_proj", "k_proj", "v_proj", "o_proj"):
+                attention[name] = {"weight": quantize_linear_layer(layer["self_attn"][name]["weight"])}
+            new_layer["self_attn"] = attention
+        else:
+            linear = dict(layer["linear_attn"])
+            for name in ("in_proj_qkv", "in_proj_z", "out_proj"):
+                linear[name] = {"weight": quantize_linear_layer(layer["linear_attn"][name]["weight"])}
+            new_layer["linear_attn"] = linear
+        layers.append(new_layer)
+    out["layers"] = layers
+    return out
+
+
 def tree_nbytes(tree):
     return sum(getattr(leaf, "nbytes", 0) for leaf in jax.tree.leaves(tree))

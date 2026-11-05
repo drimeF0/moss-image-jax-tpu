@@ -105,3 +105,23 @@ def test_real_config_parses():
     assert cfg.layer_types.count("full_attention") == 8
     assert cfg.layer_types[3] == "full_attention"
     assert cfg.conv_dim == 2 * 16 * 128 + 32 * 128
+
+
+def test_quantized_forward_close_to_float():
+    from mossjax import quant
+
+    model = _torch_model()
+    params = _params(model)
+    quantized = quant.quantize_text_encoder_params(params)
+    assert isinstance(quantized["embed_tokens"]["weight"], dict)
+    assert isinstance(quantized["layers"][0]["linear_attn"]["in_proj_qkv"]["weight"], dict)
+    assert not isinstance(quantized["layers"][0]["linear_attn"]["in_proj_b"]["weight"], dict)
+    assert isinstance(quantized["layers"][3]["self_attn"]["q_proj"]["weight"], dict)
+    ids = _inputs()
+    expected = np.asarray(jte.forward(params, jnp.asarray(ids.numpy()), CFG))
+    actual = np.asarray(jte.forward(quantized, jnp.asarray(ids.numpy()), CFG))
+    a = expected.astype(np.float64).ravel()
+    b = actual.astype(np.float64).ravel()
+    cosine = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
+    assert cosine > 0.9999, cosine
+    assert float(np.abs(actual - expected).max()) < 0.1

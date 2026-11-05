@@ -20,7 +20,8 @@
 - Готово: DiT forward (паритет fp32 2.4e-7), int8-база (weight-only/MXU),
   FLUX.2 VAE (encode/decode/patchify), LoRA с полной совместимостью файлов
   (roundtrip через upstream `networks.lora_generic`).
-- В работе: TE-прогон на TPU (int8/кэш), .toml-датасет, полный цикл тренера, прогон на v5e-1.
+- Готов весь CPU-контур: кэши (VAE/TE), датасет, обучение LoRA, экспорт, интероп.
+- Дальше: стриминг весов TE для 16 ГБ, .toml-датасет, валидация/сэмплинг, прогон на Colab v5e-1.
 - Ссылочный torch-код зафиксирован в `tests/reference/kohya_sd_scripts/`.
 
 ## Тесты
