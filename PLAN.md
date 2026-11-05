@@ -110,25 +110,33 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
 
 ## 5. Фазы
 
+Статус: Ф0 ✅ · Ф1 ✅ · Ф2 ⏳ (int8 слоя DiT сделан; лоадер реальных шардов ждёт файлов) ·
+Ф4 ✅ · Ф6 ⏳ (ядро LoRA и интероп сделаны; per-module dims/lr, EMA — позже) ·
+Ф3, Ф5, Ф7, Ф8 — запланированы.
+
 ### Ф0. Инфраструктура (сделано)
 - Репо, pyproject, .gitignore, вендоринг reference `tests/reference/kohya_sd_scripts/`.
 - PIN: upstream commit, лицензия.
 - CPU-прогон `JAX_PLATFORMS=cpu pytest -q`.
 
-### Ф1. Порт DiT forward + паритет (в работе)
+### Ф1. Порт DiT forward + паритет (сделано)
 - `src/mossjax/config.py` — MOSS_IMAGE_CONFIG.
 - `src/mossjax/model.py` — чистые функции forward (RMSNorm, SITU-GLU,
   apply_rope, 4D-RoPE, блоки, text-refiner, модуляции, голова).
 - `src/mossjax/weights.py` — конвертация torch state_dict ↔ JAX params
   (strip префиксов, split fused qkv, drop `rope.bands`).
-- Тесты: tiny-конфиг vs vendored torch `MossImage` (fp32, maxdiff ≤ 1e-6),
-  инвариантность к содержимому паддинга, skip_layers.
+- Тесты: tiny-конфиг vs vendored torch `MossImage` (fp32, факт maxdiff 2.4e-7),
+  инвариантность к содержимому паддинга, skip_layers, roundtrip весов.
 
-### Ф2. Чекпойнт и int8 базовой модели
-- Реальные safetensors: diffusers shards (первый шард), ComfyUI single-file.
-- int8 per-output-channel symmetric + scale [out]; reverse-тест точности
-  (bf16 vs int8, cos > 0.9999 на tiny), проверка HLO `s8×s8→s32` на TPU.
-- Хранение: int8-веса + fp32 scale в pytree; native-слои в bf16/fp32.
+### Ф2. Чекпойнт и int8 базовой модели (сделано частично)
+- int8 per-output-channel symmetric (`quant.py`): storage `int8` + `scale` [out],
+  weight-only-деquant linear (autodiff-safe) и native int8 MXU путь
+  (`dot_general(..., preferred_element_type=int32)`) для frozen inference.
+  Область — `layers.*.proj.*`, как upstream ConvRot (`DIT_CONVROT_INT8_TARGET_KEYS=["layers."]`).
+- `weights.state_dict_to_params` принимает официальные (diffusers-шарды) и
+  ComfyUI-ключи (fused qkv), префиксы `model.diffusion_model.`.
+- Осталось: smoke на реальном чекпойнте (первый шард), HLO-проверка s8×s8→s32
+  на v5e, custom_vjp int8-fwd/bf16-bwd (перф, не память).
 
 ### Ф3. Qwen3.5-9B TE (24 Gated DeltaNet + 8 full attn)
 - Порт forward, per-sample, без паддинга; паритет с
@@ -138,10 +146,12 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
   формат), стриминг весов с host RAM для 16 ГБ.
 - Токенизация: чат-темплейт, `MAX_TOKEN_LENGTH=4096`, кандидаты-капшены.
 
-### Ф4. FLUX.2 VAE
-- Port encode/decode (+mid-attention), patchify/normalize;
-  паритет с vendored `flux2_vae.py` / diffusers `AutoencoderKLFlux2` (fp32).
-- Кэш латентов `*_moss.npz`; decode для валидации (при наличии бюджета).
+### Ф4. FLUX.2 VAE (сделано)
+- `src/mossjax/vae.py`: NCHW-порт encoder/decoder (GroupNorm, Resnet, Attention,
+  Downsample/Upsample), patchify/normalize, загрузчик BFL/ComfyUI и
+  diffusers-конвертер.
+- Паритет: encode 1e-5, decode 5e-5 (fp32, tiny-конфиг), diffusers-конвертация
+  бит-в-бит, roundtrip safetensors.
 
 ### Ф5. Данные
 - Bucket manager (кратно 16), `.toml` датасета, `enable_multiline_caption`.
@@ -149,12 +159,14 @@ single-stream DiT. Qwen3.5-9B текстовый энкодер и FLUX.2 VAE з
   скаляры + маски, статические бакеты форм (без рекомпиляций).
 - caption dropout + выбор кандидата per-step.
 
-### Ф6. LoRA и совместимость
-- JAX LoRA (A/B, scale=alpha/r), regex-выбор модулей, per-module dim/lr,
-  LoRA+ (опционально).
-- Экспорт в kohya-формат и импорт kohya-файлов; roundtrip-тест с upstream
-  `networks.lora_generic` на CPU (загрузка/merge/сверка 1e-6).
-- Опционально: save/load TE-LoRA — вне первого этапа.
+### Ф6. LoRA и совместимость (ядро сделано)
+- `src/mossjax/lora.py`: kohya-раскладка `lora_unet_layers_N_proj_*`
+  (`lora_down.weight`, `lora_up.weight`, `alpha`), init/export/import/merge.
+- `model.forward(..., lora=...)`: LoRA-ветка bf16 поверх int8-базы.
+- Roundtrip: наш safetensors грузится в upstream `networks.lora_generic`
+  (strict), значения/alpha совпадают, форвард патченного torch == JAX (1e-5).
+- Осталось: per-module `network_reg_dims`/`network_reg_lrs`, LoRA+, EMA,
+  резюмируемые чекпойнты.
 
 ### Ф7. Тренер
 - Rectified-flow loss, t-sampling (sigma/uniform/sigmoid/shift/flux_shift/

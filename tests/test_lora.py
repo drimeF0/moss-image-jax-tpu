@@ -83,8 +83,8 @@ def test_upstream_loads_exported_lora_and_forward_matches(tmp_path):
     first = network.unet_loras[0]
     leaf = tree["layers"][0]["proj"]["q"]
     assert first.lora_name == "lora_unet_layers_0_proj_q"
-    assert torch.allclose(first.lora_down.weight, torch.from_numpy(np.asarray(leaf["A"])))
-    assert torch.allclose(first.lora_up.weight, torch.from_numpy(np.asarray(leaf["B"])))
+    assert torch.allclose(first.lora_down.weight, torch.from_numpy(np.array(leaf["A"])))
+    assert torch.allclose(first.lora_up.weight, torch.from_numpy(np.array(leaf["B"])))
     assert float(first.alpha) == ALPHA
 
     with torch.no_grad():

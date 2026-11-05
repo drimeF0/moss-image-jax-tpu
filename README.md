@@ -17,8 +17,11 @@
 
 ## Статус
 
-Фаза 0 (инфраструктура) и Фаза 1 (порт DiT forward + паритет на CPU) в работе.
-Ссылочный torch-код зафиксирован в `tests/reference/kohya_sd_scripts/`.
+- Готово: DiT forward (паритет fp32 2.4e-7), int8-база (weight-only/MXU),
+  FLUX.2 VAE (encode/decode/patchify), LoRA с полной совместимостью файлов
+  (roundtrip через upstream `networks.lora_generic`).
+- В работе: Qwen3.5-9B TE, дата-пайплайн и тренер, TPU v5e-1 прогон.
+- Ссылочный torch-код зафиксирован в `tests/reference/kohya_sd_scripts/`.
 
 ## Тесты
 

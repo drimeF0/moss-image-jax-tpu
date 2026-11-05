@@ -31,12 +31,15 @@ def split_fused_qkv(key: str, dim: int):
     return [base + "q" + suffix, base + "k" + suffix, base + "v" + suffix]
 
 
-LIST_CONTAINERS = ("layers", "blocks")
+DIT_LIST_CONTAINERS = ("layers", "blocks")
 
 
-def _parse_key(key: str):
+def _parse_key(key: str, list_containers=DIT_LIST_CONTAINERS):
     parts = key.split(".")
-    return [int(segment) if index > 0 and parts[index - 1] in LIST_CONTAINERS else segment for index, segment in enumerate(parts)]
+    return [
+        int(segment) if index > 0 and parts[index - 1] in list_containers else segment
+        for index, segment in enumerate(parts)
+    ]
 
 
 def _assign(tree, parts, value):
@@ -62,10 +65,10 @@ def _assign(tree, parts, value):
         _assign(child, parts[1:], value)
 
 
-def unflatten_flat(flat: Dict[str, jnp.ndarray]):
+def unflatten_flat(flat: Dict[str, jnp.ndarray], list_containers=DIT_LIST_CONTAINERS):
     tree = {}
     for key, value in flat.items():
-        _assign(tree, _parse_key(key), value)
+        _assign(tree, _parse_key(key, list_containers), value)
     return tree
 
 
