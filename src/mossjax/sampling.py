@@ -34,10 +34,19 @@ def euler_step(latents, model_pred, sigmas, step_index):
     return latents + dt * model_pred
 
 
-def _make_predict(cfg, skip_layers, remat):
+def _make_predict(cfg, skip_layers, remat, query_chunk_size=None):
     def predict(params, lora, x, timesteps, context, mask):
         return model_mod.forward(
-            params, x, timesteps, context, mask, cfg, skip_layers=skip_layers, lora=lora, remat=remat
+            params,
+            x,
+            timesteps,
+            context,
+            mask,
+            cfg,
+            skip_layers=skip_layers,
+            lora=lora,
+            remat=remat,
+            query_chunk_size=query_chunk_size,
         )
 
     return jax.jit(predict)
@@ -63,6 +72,7 @@ def generate_latents(
     rng: Optional[np.random.Generator] = None,
     progress: bool = True,
     log_every: int = 1,
+    query_chunk_size: Optional[int] = None,
 ):
     height = max(16, height - height % 16)
     width = max(16, width - width % 16)
@@ -81,8 +91,8 @@ def generate_latents(
         negative_embeds = jnp.asarray(negative_embeds, dtype=jnp.float32)
         negative_mask = jnp.asarray(negative_mask, dtype=jnp.int32)
 
-    positive_predict = _make_predict(cfg, (), remat)
-    negative_predict = _make_predict(cfg, tuple(uncond_skip_layers), remat) if do_cfg else None
+    positive_predict = _make_predict(cfg, (), remat, query_chunk_size)
+    negative_predict = _make_predict(cfg, tuple(uncond_skip_layers), remat, query_chunk_size) if do_cfg else None
 
     sigmas = sampling_sigmas(steps, flow_shift)
     num_steps = len(sigmas) - 1

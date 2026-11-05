@@ -114,3 +114,14 @@ def test_load_params_from_safetensors(tmp_path):
     reference = _params(model)
     for a, b in zip(jax.tree.leaves(loaded), jax.tree.leaves(reference)):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+
+
+def test_attention_chunking_matches_unchunked():
+    rng = np.random.default_rng(0)
+    q = jnp.asarray(rng.standard_normal((1, 5, 2, 4), dtype=np.float32))
+    k = jnp.asarray(rng.standard_normal((1, 5, 2, 4), dtype=np.float32))
+    v = jnp.asarray(rng.standard_normal((1, 5, 2, 4), dtype=np.float32))
+    mask = jnp.asarray(np.array([[1, 1, 1, 0, 0]], dtype=np.bool_))
+    full = jm.attention(q, k, v, mask)
+    chunked = jm.attention(q, k, v, mask, query_chunk_size=2)
+    np.testing.assert_allclose(np.asarray(full), np.asarray(chunked), rtol=1e-6, atol=1e-6)

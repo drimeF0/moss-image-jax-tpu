@@ -119,3 +119,24 @@ def test_generate_latents_progress(capsys):
         params, CFG, prompt, mask, height=32, width=32, steps=2, guidance_scale=1.0, seed=0, progress=False
     )
     assert capsys.readouterr().out == ""
+
+
+def test_generate_latents_with_query_chunking():
+    params = _params(_torch_model())
+    prompt = np.zeros((1, 4, CFG.text_dim), dtype=np.float32)
+    mask = np.ones((1, 4), dtype=np.int32)
+    out = sampling.generate_latents(
+        params,
+        CFG,
+        prompt,
+        mask,
+        height=32,
+        width=32,
+        steps=2,
+        guidance_scale=1.0,
+        seed=0,
+        initial_latents=np.zeros((1, CFG.latent_channels, 2, 2), np.float32),
+        query_chunk_size=2,
+        progress=False,
+    )
+    assert np.isfinite(out).all()

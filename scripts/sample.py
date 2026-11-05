@@ -8,6 +8,7 @@ Example:
 """
 
 import argparse
+import gc
 import os
 import sys
 
@@ -43,6 +44,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--int8", action="store_true")
     parser.add_argument("--lora-multiplier", type=float, default=1.0)
+    parser.add_argument("--query-chunk", type=int, default=0, help="attention query chunk for memory (0 = auto)")
     return parser.parse_args()
 
 
@@ -75,8 +77,13 @@ def main():
     negative_embeds = caching.encode_prompt_embeds(te_params, te_cfg, [negative_ids])[0][None]
     prompt_mask = np.ones(prompt_embeds.shape[:2], dtype=np.int32)
     negative_mask = np.ones(negative_embeds.shape[:2], dtype=np.int32)
+    del te_params
+    gc.collect()
 
     skip_layers = tuple(int(v) for v in args.uncond_skip_layers.split(",") if v.strip())
+    query_chunk = args.query_chunk if args.query_chunk > 0 else None
+    if query_chunk is None and (args.width // 16) * (args.height // 16) > 2048:
+        query_chunk = 1024
     latents = sampling.generate_latents(
         params,
         MOSS_IMAGE_CONFIG,
@@ -92,7 +99,10 @@ def main():
         uncond_skip_layers=skip_layers,
         seed=args.seed,
         lora=lora_tree,
+        query_chunk_size=query_chunk,
     )
+    del params
+    gc.collect()
     vae_params, vae_cfg = vae_mod.load_vae_params(weights.load_state_dict_from_safetensors([args.vae]))
     pixels = np.asarray(vae_mod.decode_from_dit(vae_params, latents, vae_cfg), dtype=np.float32)[0]
     pixels = np.clip((pixels.transpose(1, 2, 0) + 1.0) * 127.5, 0, 255).astype(np.uint8)

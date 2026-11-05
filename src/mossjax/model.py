@@ -82,18 +82,29 @@ def apply_rope(x, rope):
     return x * cos + jnp.concatenate((-b, a), -1) * sin
 
 
-def attention(q, k, v, key_mask=None):
+def _attention_core(qh, kh, vh, key_mask):
+    scale = 1.0 / math.sqrt(qh.shape[-1])
+    scores = jnp.einsum("bhqd,bhkd->bhqk", qh, kh, precision=_precision_for(qh, kh)) * scale
+    if key_mask is not None:
+        bias = jnp.where(key_mask[:, None, None, :], jnp.zeros((), scores.dtype), jnp.full((), -jnp.inf, scores.dtype))
+        scores = scores + bias
+    probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(vh.dtype)
+    return jnp.einsum("bhqk,bhkd->bhqd", probs, vh, precision=_precision_for(probs, vh))
+
+
+def attention(q, k, v, key_mask=None, query_chunk_size=None):
     batch, length, heads, head_dim = q.shape
     qh = jnp.transpose(q, (0, 2, 1, 3))
     kh = jnp.transpose(k, (0, 2, 1, 3))
     vh = jnp.transpose(v, (0, 2, 1, 3))
-    scale = 1.0 / math.sqrt(head_dim)
-    scores = jnp.einsum("bhqd,bhkd->bhqk", qh, kh, precision=_precision_for(q, k)) * scale
-    if key_mask is not None:
-        bias = jnp.where(key_mask[:, None, None, :], jnp.zeros((), scores.dtype), jnp.full((), -jnp.inf, scores.dtype))
-        scores = scores + bias
-    probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(v.dtype)
-    out = jnp.einsum("bhqk,bhkd->bhqd", probs, vh, precision=_precision_for(probs, v))
+    if query_chunk_size is None or query_chunk_size >= length:
+        out = _attention_core(qh, kh, vh, key_mask)
+    else:
+        chunks = [
+            _attention_core(qh[:, :, start : start + query_chunk_size], kh, vh, key_mask)
+            for start in range(0, length, query_chunk_size)
+        ]
+        out = jnp.concatenate(chunks, axis=2)
     return jnp.transpose(out, (0, 2, 1, 3)).reshape(batch, length, heads * head_dim)
 
 
@@ -116,7 +127,7 @@ def get_time_modulation(timesteps, params, cfg):
     return mod, head
 
 
-def main_block(x, rope, modulation, params, key_mask, cfg, lora_block=None):
+def main_block(x, rope, modulation, params, key_mask, cfg, lora_block=None, query_chunk_size=None):
     shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = jnp.split(modulation, 6, axis=1)
     norm_dtype = params["norm1"]["weight"].dtype
     lora_proj = None if lora_block is None else lora_block["proj"]
@@ -142,7 +153,7 @@ def main_block(x, rope, modulation, params, key_mask, cfg, lora_block=None):
     q = apply_rope(q, rope).astype(v.dtype)
     k = apply_rope(k, rope).astype(v.dtype)
 
-    attn = attention(q, k, v, key_mask)
+    attn = attention(q, k, v, key_mask, query_chunk_size=query_chunk_size)
     o = params["proj"]["o"]["weight"]
     x = x + linear_with_lora(attn.astype(weight_dtype(o)), o, lora_leaf("o")) * gate_a
 
@@ -180,14 +191,14 @@ def text_embedder(context, rope_text, context_mask, params, cfg):
     return x
 
 
-def make_checkpointed_block(cfg):
+def make_checkpointed_block(cfg, query_chunk_size=None):
     def call(x, rope, modulation, block_params, key_mask, lora_block):
-        return main_block(x, rope, modulation, block_params, key_mask, cfg, lora_block)
+        return main_block(x, rope, modulation, block_params, key_mask, cfg, lora_block, query_chunk_size)
 
     return jax.checkpoint(call)
 
 
-def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CONFIG, skip_layers=(), lora=None, remat=False):
+def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CONFIG, skip_layers=(), lora=None, remat=False, query_chunk_size=None):
     batch, channels, height, width = x.shape
     num_img = height * width
     text_length = context.shape[1]
@@ -210,7 +221,7 @@ def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CON
     key_mask = jnp.concatenate(
         (jnp.ones((batch, num_img), dtype=jnp.bool_), context_mask.astype(jnp.bool_)), axis=1
     )
-    block_fn = make_checkpointed_block(cfg) if remat else None
+    block_fn = make_checkpointed_block(cfg, query_chunk_size) if remat else None
     for index, block in enumerate(params["layers"]):
         if index in skip:
             continue
@@ -218,7 +229,7 @@ def forward(params, x, timesteps, context, context_mask=None, cfg=MOSS_IMAGE_CON
         if remat:
             hidden = block_fn(hidden, rope, mod, block, key_mask, lora_block)
         else:
-            hidden = main_block(hidden, rope, mod, block, key_mask, cfg, lora_block)
+            hidden = main_block(hidden, rope, mod, block, key_mask, cfg, lora_block, query_chunk_size)
 
     hidden = hidden[:, :num_img]
     fnw = params["final_norm_video"]["weight"]
