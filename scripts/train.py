@@ -60,7 +60,7 @@ def parse_args():
     parser.add_argument("--timestep-uniform-ratio", type=float, default=0.0)
     parser.add_argument("--int8", action="store_true", help="quantize the frozen DiT base to int8")
     parser.add_argument("--no-remat", action="store_true", help="disable per-block gradient checkpointing")
-    parser.add_argument("--query-chunk", type=int, default=1024, help="attention query chunk during training (0 = disable)")
+    parser.add_argument("--query-chunk", type=int, default=512, help="attention query chunk during training (0 = disable)")
     parser.add_argument("--loss-type", default="mse", choices=["mse", "huber"])
     return parser.parse_args()
 

@@ -59,7 +59,7 @@ def parse_args():
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--timestep-sampling", default="truncated_logit_normal")
     parser.add_argument("--query-chunk", type=int, default=0, help="attention query chunk for sampling (0 = auto)")
-    parser.add_argument("--train-query-chunk", type=int, default=1024, help="attention query chunk during training (0 = disable)")
+    parser.add_argument("--train-query-chunk", type=int, default=512, help="attention query chunk during training (0 = disable)")
     parser.add_argument("--resume-lora", default=None, help="continue training from an existing LoRA safetensors")
     return parser.parse_args()
 

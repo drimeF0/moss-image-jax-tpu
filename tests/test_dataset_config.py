@@ -138,3 +138,37 @@ def test_cached_dataset_requires_records():
 
     with pytest.raises(ValueError, match="records must not be empty"):
         CachedDataset([], bucket_reso=(64, 96))
+
+
+def test_cached_dataset_warmup_orders_buckets_largest_first(tmp_path):
+    images = tmp_path / "images"
+    images.mkdir()
+    rng = np.random.default_rng(7)
+    embeds = rng.standard_normal((4, 8), dtype=np.float32)
+    uncond = rng.standard_normal((2, 8), dtype=np.float32)
+    specs = [
+        ("small", (32, 32), (8, 4, 4)),
+        ("big", (128, 64), (8, 8, 16)),
+        ("mid", (64, 64), (8, 8, 8)),
+    ]
+    records = []
+    for name, bucket, shape in specs:
+        te_path, latents_path = _write_record(
+            images, name, embeds, uncond, original_size=bucket, latents_shape=shape
+        )
+        records.append(
+            {
+                "key": name,
+                "text_encoder": str(te_path),
+                "latents": [str(latents_path)],
+                "num_repeats": 1,
+                "caption_dropout_rate": None,
+                "bucket": bucket,
+            }
+        )
+    vae_stats = {"running_mean": np.zeros(32, np.float32), "running_var": np.ones(32, np.float32)}
+    dataset = CachedDataset(records, bucket_reso=(32, 32), seed=0, vae_stats=vae_stats)
+    assert dataset.num_warmup_buckets == 3
+    order = [dataset.sample()["key"] for _ in range(3)]
+    assert order == ["big", "mid", "small"]
+    assert not dataset.warmup_queue

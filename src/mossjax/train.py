@@ -60,6 +60,11 @@ def train_loop(
     initial_lora=None,
 ):
     dataset = CachedDataset(records, bucket_reso, seed=loop_config.seed + 1, vae_stats=vae_stats)
+    if dataset.num_warmup_buckets > 1:
+        log_fn(
+            f"[train] warmup: first {dataset.num_warmup_buckets} steps visit distinct buckets "
+            f"largest-first (avoids late large-shape compilations and allocator fragmentation)"
+        )
     state, optimizer = trainer.init_train_state(
         params, cfg, train_config, jax.random.PRNGKey(loop_config.seed), initial_lora=initial_lora
     )
@@ -106,7 +111,15 @@ def train_loop(
         noise = rng.standard_normal(latents.shape, dtype=np.float32)
         weighting = losses.compute_loss_weighting(loop_config.weighting_scheme, sigmas)
         batch = tuple(jnp.asarray(x) for x in (latents, noise, sigmas, context, mask, weighting))
-        state, metrics = step_fn(state, params, *batch)
+        try:
+            state, metrics = step_fn(state, params, *batch)
+        except Exception as error:
+            if "RESOURCE_EXHAUSTED" in str(error):
+                log_fn(
+                    "[train] OOM on this batch shape: lower --width/--height (or max_bucket_reso), "
+                    "reduce --train-query-chunk (e.g. 256), or lower the text-length buckets"
+                )
+            raise
         loss = float(metrics["loss"])
         grad_norm = float(metrics["grad_norm"])
         history.append(loss)

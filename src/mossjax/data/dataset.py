@@ -35,6 +35,7 @@ class CachedDataset:
         caption_dropout: bool = True,
         seed: int = 0,
         vae_stats: Optional[dict] = None,
+        warmup_order: bool = True,
     ):
         if not records:
             raise ValueError("records must not be empty")
@@ -47,6 +48,15 @@ class CachedDataset:
         self.rng = np.random.default_rng(seed)
         weights = np.array([max(1, int(record.get("num_repeats", 1))) for record in self.records], dtype=np.float64)
         self.weights = weights / weights.sum()
+        self.warmup_queue = self._build_warmup_queue() if warmup_order else []
+        self.num_warmup_buckets = len(self.warmup_queue)
+
+    def _build_warmup_queue(self):
+        representatives = {}
+        for index, record in enumerate(self.records):
+            bucket = tuple(record.get("bucket", self.bucket_reso))
+            representatives.setdefault(bucket, index)
+        return [representatives[bucket] for bucket in sorted(representatives, key=lambda b: b[0] * b[1], reverse=True)]
 
     def __len__(self):
         return len(self.records)
@@ -80,6 +90,8 @@ class CachedDataset:
         return latents, embeds, mask
 
     def sample(self, index: Optional[int] = None):
+        if index is None and self.warmup_queue:
+            index = self.warmup_queue.pop(0)
         if index is None:
             index = int(self.rng.choice(len(self.records), p=self.weights))
         record = self.records[index % len(self.records)]

@@ -32,7 +32,7 @@ class TrainConfig:
     adafactor_momentum: Optional[float] = None
     adafactor_eps: float = 1e-30
     adafactor_min_dim_size_to_factor: int = 128
-    query_chunk_size: Optional[int] = 1024
+    query_chunk_size: Optional[int] = 512
 
 
 def make_optimizer(train_config: TrainConfig):
