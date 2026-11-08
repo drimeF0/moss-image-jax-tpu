@@ -93,6 +93,7 @@ def test_e2e_cache_train_export(tmp_path):
     train_config = trainer.TrainConfig(rank=2, learning_rate=5e-2, remat=True)
     loop_config = train_mod.LoopConfig(steps=8, timestep_sampling="uniform", log_every=0, save_every=4, seed=0)
     output_dir = tmp_path / "out"
+    messages = []
     state, history = train_mod.train_loop(
         dit_params,
         DIT,
@@ -102,8 +103,9 @@ def test_e2e_cache_train_export(tmp_path):
         bucket_reso=BUCKET,
         output_dir=str(output_dir),
         vae_stats=vae_stats,
-        log_fn=lambda *_: None,
+        log_fn=messages.append,
     )
+    assert any(message.startswith("[train] new input shape #1") for message in messages)
     assert len(history) == 8
     assert all(np.isfinite(history))
     final_path = output_dir / "moss_lora_final.safetensors"

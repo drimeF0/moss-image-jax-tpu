@@ -67,11 +67,19 @@ def train_loop(
         os.makedirs(output_dir, exist_ok=True)
 
     history = []
+    seen_shapes = set()
     for step in range(1, loop_config.steps + 1):
         sample = dataset.sample()
         latents = sample["latents"]
         context = sample["context"]
         mask = sample["context_mask"]
+        shape_key = (latents.shape, int(context.shape[1]))
+        if shape_key not in seen_shapes:
+            seen_shapes.add(shape_key)
+            log_fn(
+                f"[train] new input shape #{len(seen_shapes)}: latents {tuple(latents.shape)}, "
+                f"text {context.shape[1]} (new compilation + device workspace)"
+            )
         batch_size, _, height, width = latents.shape
         sigmas = losses.sample_sigmas(
             loop_config.timestep_sampling,
