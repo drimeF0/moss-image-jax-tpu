@@ -66,6 +66,44 @@ def load_latents(path, bucket_reso, stride: int = LATENT_STRIDE) -> np.ndarray:
         raise KeyError(f"latents not found in {path} (tried latents{suffix}, latents and any latents_* key)")
 
 
+def is_latents_cache_valid(path, bucket_reso, stride: int = LATENT_STRIDE) -> bool:
+    if not path or not os.path.exists(path):
+        return False
+    height = bucket_reso[1] // stride
+    width = bucket_reso[0] // stride
+    suffix = f"_{height}x{width}"
+    try:
+        with np.load(path) as npz:
+            files = set(npz.files)
+            return ("latents" + suffix) in files or "latents" in files
+    except Exception:
+        return False
+
+
+def is_te_cache_valid(path, captions=None) -> bool:
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        with np.load(path) as npz:
+            files = set(npz.files)
+            if "uncond_embeds" not in files or "uncond_mask" not in files:
+                return False
+            if "num_candidates" not in files:
+                return "prompt_embeds" in files and "attn_mask" in files and (captions is None or len(captions) == 1)
+            num_candidates = int(npz["num_candidates"])
+            if captions is not None and num_candidates != len(captions):
+                return False
+            for index in range(num_candidates):
+                for key in (f"prompt_embeds_{index}", f"attn_mask_{index}", f"caption_{index}"):
+                    if key not in files:
+                        return False
+                if captions is not None and str(npz[f"caption_{index}"]) != captions[index]:
+                    return False
+            return True
+    except Exception:
+        return False
+
+
 def read_latents_original_size(path):
     with np.load(path) as npz:
         for key in npz.files:

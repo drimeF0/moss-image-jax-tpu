@@ -100,6 +100,7 @@ def build_caches_from_images(
     caption_dropout_rate: float = 0.0,
     max_samples: Optional[int] = None,
     resolution: Optional[Sequence[int]] = None,
+    overwrite_existing: bool = False,
     progress: bool = True,
     log_every: int = 1,
 ):
@@ -121,41 +122,65 @@ def build_caches_from_images(
         items = items[:max_samples]
     total_started = time.time()
     cached = []
+    built = 0
+    skipped = 0
     for index, (name, captions) in enumerate(items):
         image_started = time.time()
         image_path = os.path.join(images_dir, name)
-        image = Image.open(image_path).convert("RGB")
-        original_size = image.size
         if manager is not None:
-            reso, _, _ = manager.select_bucket(*image.size)
+            with Image.open(image_path) as probe:
+                original_size = probe.size
+            reso, _, _ = manager.select_bucket(*original_size)
             target_size = tuple(reso)
         else:
             target_size = tuple(resolution)
-        image = image.resize(target_size, Image.LANCZOS)
+            original_size = None
         width, height = target_size
-        pixels = np.asarray(image, dtype=np.float32) / 127.5 - 1.0
-        pixels = pixels.transpose(2, 0, 1)
 
         stem = os.path.splitext(os.path.join(output_dir, name))[0]
         parent = os.path.dirname(stem)
         if parent:
             os.makedirs(parent, exist_ok=True)
         latents_path = stem + f"_{width:04d}x{height:04d}_moss.npz"
+        te_path = stem + "_moss_te.npz"
+
+        if (
+            not overwrite_existing
+            and cache_mod.is_latents_cache_valid(latents_path, target_size)
+            and cache_mod.is_te_cache_valid(te_path, captions)
+        ):
+            skipped += 1
+            cached.append(name)
+            if progress and ((index + 1) % max(log_every, 1) == 0 or index == len(items) - 1):
+                elapsed = time.time() - total_started
+                eta = elapsed / (index + 1) * (len(items) - index - 1)
+                print(
+                    f"[cache {index + 1}/{len(items)}] {name}: skipped (already cached), eta {eta:.0f}s",
+                    flush=True,
+                )
+            continue
+
+        image = Image.open(image_path).convert("RGB")
+        if original_size is None:
+            original_size = image.size
+        image = image.resize(target_size, Image.LANCZOS)
+        pixels = np.asarray(image, dtype=np.float32) / 127.5 - 1.0
+        pixels = pixels.transpose(2, 0, 1)
         write_latents_cache(
             latents_path, vae_params, vae_cfg, pixels, original_size=[original_size[0], original_size[1]]
         )
         latents_done = time.time()
 
-        te_path = stem + "_moss_te.npz"
         caption_ids = [tokenize_prompt(tokenizer, caption) for caption in captions]
         write_te_cache(
             te_path, te_params, te_cfg, caption_ids, captions, uncond_ids, caption_dropout_rate=caption_dropout_rate
         )
         te_done = time.time()
         cached.append(name)
+        built += 1
 
-        if progress and index == 0:
-            print("[cache] first image includes XLA compilation for the current shapes", flush=True)
+        if progress and built == 1:
+            print("[cache] first built image includes XLA compilation for the current shapes", flush=True)
         if progress and ((index + 1) % max(log_every, 1) == 0 or index == len(items) - 1):
             elapsed = te_done - total_started
             eta = elapsed / (index + 1) * (len(items) - index - 1)
@@ -166,7 +191,8 @@ def build_caches_from_images(
             )
     if progress and items:
         print(
-            f"[cache] done: {len(cached)} images in {time.time() - total_started:.0f}s -> {output_dir}",
+            f"[cache] done: {len(cached)} images in {time.time() - total_started:.0f}s "
+            f"(built {built}, skipped {skipped}) -> {output_dir}",
             flush=True,
         )
     return cached

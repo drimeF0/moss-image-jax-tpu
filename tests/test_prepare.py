@@ -277,3 +277,132 @@ def test_build_caches_uses_fixed_resolution_and_original_size(tmp_path, monkeypa
     )
     assert captured["latents_path"].endswith("a_0064x0096_moss.npz")
     assert captured["original_size"] == [50, 100]
+
+
+def test_cache_validity_helpers(tmp_path):
+    from mossjax.data import cache as cache_mod
+
+    latents = np.zeros((8, 12, 8), dtype=np.float32)
+    latents_path = tmp_path / "a_0064x0096_moss.npz"
+    cache_mod.save_latents(latents_path, latents, original_size=[64, 96], crop_ltrb=[0, 0, 64, 96])
+    assert cache_mod.is_latents_cache_valid(str(latents_path), (64, 96))
+    assert not cache_mod.is_latents_cache_valid(str(latents_path), (64, 64))
+    assert not cache_mod.is_latents_cache_valid(str(tmp_path / "missing.npz"), (64, 96))
+
+    embeds = np.zeros((5, 8), dtype=np.float32)
+    uncond = np.zeros((2, 8), dtype=np.float32)
+    te_path = tmp_path / "a_moss_te.npz"
+    cache_mod.save_te_outputs(te_path, [(embeds, "one"), (embeds, "two")], uncond)
+    assert cache_mod.is_te_cache_valid(str(te_path), ["one", "two"])
+    assert not cache_mod.is_te_cache_valid(str(te_path), ["one"])
+    assert not cache_mod.is_te_cache_valid(str(te_path), ["one", "other"])
+    assert cache_mod.is_te_cache_valid(str(te_path))
+
+
+def test_build_caches_skips_existing_and_force_rebuilds(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from mossjax import caching
+    from mossjax.data import cache as cache_mod
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    Image.fromarray(np.zeros((32, 32, 3), dtype="uint8")).save(images_dir / "a.png")
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+
+    cache_mod.save_latents(
+        str(cache_dir / "a_0032x0032_moss.npz"),
+        np.zeros((8, 4, 4), dtype=np.float32),
+        original_size=[32, 32],
+        crop_ltrb=[0, 0, 32, 32],
+    )
+    cache_mod.save_te_outputs(
+        str(cache_dir / "a_moss_te.npz"),
+        [(np.zeros((4, 8), dtype=np.float32), "one")],
+        np.zeros((2, 8), dtype=np.float32),
+    )
+
+    calls = {"latents": 0, "te": 0}
+    monkeypatch.setattr(caching, "write_latents_cache", lambda *args, **kwargs: calls.__setitem__("latents", calls["latents"] + 1))
+    monkeypatch.setattr(caching, "write_te_cache", lambda *args, **kwargs: calls.__setitem__("te", calls["te"] + 1))
+
+    class Tokenizer:
+        def __call__(self, text):
+            return {"input_ids": [1, 2, 3]}
+
+    cached = caching.build_caches_from_images(
+        str(images_dir),
+        {"a.png": ["one"]},
+        None,
+        None,
+        None,
+        None,
+        Tokenizer(),
+        str(cache_dir),
+        resolution=(32, 32),
+        progress=False,
+    )
+    assert cached == ["a.png"]
+    assert calls == {"latents": 0, "te": 0}
+
+    caching.build_caches_from_images(
+        str(images_dir),
+        {"a.png": ["one"]},
+        None,
+        None,
+        None,
+        None,
+        Tokenizer(),
+        str(cache_dir),
+        resolution=(32, 32),
+        overwrite_existing=True,
+        progress=False,
+    )
+    assert calls == {"latents": 1, "te": 1}
+
+
+def test_build_caches_rebuilds_when_captions_changed(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from mossjax import caching
+    from mossjax.data import cache as cache_mod
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    Image.fromarray(np.zeros((32, 32, 3), dtype="uint8")).save(images_dir / "a.png")
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    cache_mod.save_latents(
+        str(cache_dir / "a_0032x0032_moss.npz"),
+        np.zeros((8, 4, 4), dtype=np.float32),
+        original_size=[32, 32],
+        crop_ltrb=[0, 0, 32, 32],
+    )
+    cache_mod.save_te_outputs(
+        str(cache_dir / "a_moss_te.npz"),
+        [(np.zeros((4, 8), dtype=np.float32), "old caption")],
+        np.zeros((2, 8), dtype=np.float32),
+    )
+
+    calls = {"te": 0}
+    monkeypatch.setattr(caching, "write_latents_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(caching, "write_te_cache", lambda *args, **kwargs: calls.__setitem__("te", calls["te"] + 1))
+
+    class Tokenizer:
+        def __call__(self, text):
+            return {"input_ids": [1, 2, 3]}
+
+    caching.build_caches_from_images(
+        str(images_dir),
+        {"a.png": ["new caption"]},
+        None,
+        None,
+        None,
+        None,
+        Tokenizer(),
+        str(cache_dir),
+        resolution=(32, 32),
+        progress=False,
+    )
+    assert calls["te"] == 1

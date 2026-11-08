@@ -42,6 +42,7 @@ def parse_args():
     parser.add_argument("--optimizer", default="adamw", choices=["adamw", "adafactor"])
     parser.add_argument("--int8", action="store_true", help="int8 for the DiT and TE (host-side quantization)")
     parser.add_argument("--no-cache", action="store_true", help="skip cache building (use existing caches)")
+    parser.add_argument("--force-cache", action="store_true", help="rebuild all caches even if valid ones exist")
     parser.add_argument("--skip-sample", action="store_true")
     parser.add_argument("--dit", default=None)
     parser.add_argument("--vae", default=None)
@@ -220,6 +221,7 @@ def run_full(args, output_dir, summary):
                     cache_dir,
                     max_samples=args.max_samples,
                     resolution=cache_resolution,
+                    overwrite_existing=args.force_cache,
                 )
                 summary["cache"] = {"samples": len(cached), "dir": cache_dir}
             if need_sample:

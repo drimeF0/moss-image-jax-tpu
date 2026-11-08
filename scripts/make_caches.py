@@ -39,6 +39,7 @@ def parse_args():
     parser.add_argument("--bucket-steps", type=int, default=64)
     parser.add_argument("--caption-dropout-rate", type=float, default=0.0)
     parser.add_argument("--int8-te", action="store_true")
+    parser.add_argument("--force-cache", action="store_true", help="rebuild all caches even if valid ones exist")
     return parser.parse_args()
 
 
@@ -84,6 +85,7 @@ def main():
         bucket_steps=args.bucket_steps,
         caption_dropout_rate=args.caption_dropout_rate,
         resolution=tuple(args.resolution) if args.resolution else None,
+        overwrite_existing=args.force_cache,
     )
     print(f"cached {len(cached)} images into {args.output_dir}")
 
