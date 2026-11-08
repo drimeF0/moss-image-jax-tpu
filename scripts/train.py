@@ -59,6 +59,7 @@ def parse_args():
     parser.add_argument("--timestep-uniform-ratio", type=float, default=0.0)
     parser.add_argument("--int8", action="store_true", help="quantize the frozen DiT base to int8")
     parser.add_argument("--no-remat", action="store_true", help="disable per-block gradient checkpointing")
+    parser.add_argument("--query-chunk", type=int, default=1024, help="attention query chunk during training (0 = disable)")
     parser.add_argument("--loss-type", default="mse", choices=["mse", "huber"])
     return parser.parse_args()
 
@@ -107,6 +108,7 @@ def main():
         max_grad_norm=args.max_grad_norm,
         remat=not args.no_remat,
         loss_type=args.loss_type,
+        query_chunk_size=args.query_chunk if args.query_chunk > 0 else None,
         optimizer=args.optimizer,
         adafactor_scale_parameter=not args.adafactor_no_scale_parameter,
         adafactor_relative_step=args.adafactor_relative_step,

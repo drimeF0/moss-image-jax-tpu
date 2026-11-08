@@ -32,6 +32,7 @@ class TrainConfig:
     adafactor_momentum: Optional[float] = None
     adafactor_eps: float = 1e-30
     adafactor_min_dim_size_to_factor: int = 128
+    query_chunk_size: Optional[int] = 1024
 
 
 def make_optimizer(train_config: TrainConfig):
@@ -80,7 +81,15 @@ def make_accumulated_train_step(cfg: MossConfig, train_config: TrainConfig, opti
     def loss_fn(lora_params, params, latents, noise, sigmas, context, mask, weighting):
         noisy = noisy_model_input(latents, noise, sigmas)
         prediction = model_mod.forward(
-            params, noisy, sigmas * NUM_TRAIN_TIMESTEPS, context, mask, cfg, lora=lora_params, remat=train_config.remat
+            params,
+            noisy,
+            sigmas * NUM_TRAIN_TIMESTEPS,
+            context,
+            mask,
+            cfg,
+            lora=lora_params,
+            remat=train_config.remat,
+            query_chunk_size=train_config.query_chunk_size,
         )
         return rectified_flow_loss(
             prediction,
@@ -119,7 +128,15 @@ def make_train_step(cfg: MossConfig, train_config: TrainConfig, optimizer):
     def loss_fn(lora_params, params, latents, noise, sigmas, context, mask, weighting):
         noisy = noisy_model_input(latents, noise, sigmas)
         prediction = model_mod.forward(
-            params, noisy, sigmas * NUM_TRAIN_TIMESTEPS, context, mask, cfg, lora=lora_params, remat=train_config.remat
+            params,
+            noisy,
+            sigmas * NUM_TRAIN_TIMESTEPS,
+            context,
+            mask,
+            cfg,
+            lora=lora_params,
+            remat=train_config.remat,
+            query_chunk_size=train_config.query_chunk_size,
         )
         return rectified_flow_loss(
             prediction,

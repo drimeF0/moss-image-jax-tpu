@@ -58,6 +58,7 @@ def parse_args():
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--timestep-sampling", default="truncated_logit_normal")
     parser.add_argument("--query-chunk", type=int, default=0, help="attention query chunk for sampling (0 = auto)")
+    parser.add_argument("--train-query-chunk", type=int, default=1024, help="attention query chunk during training (0 = disable)")
     return parser.parse_args()
 
 
@@ -250,6 +251,7 @@ def run_full(args, output_dir, summary):
         learning_rate=args.learning_rate or 1e-4,
         optimizer=args.optimizer,
         remat=True,
+        query_chunk_size=args.train_query_chunk if args.train_query_chunk > 0 else None,
     )
     loop_config = train_mod.LoopConfig(
         steps=steps, seed=args.seed, timestep_sampling=args.timestep_sampling, save_every=100

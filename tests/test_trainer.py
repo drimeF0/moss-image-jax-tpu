@@ -216,3 +216,22 @@ def test_bf16_training_step_runs():
     for _ in range(2):
         state, metrics = step(state, params, *batch)
     assert np.isfinite(float(metrics["loss"]))
+
+
+def test_query_chunking_preserves_loss():
+    from mossjax import losses
+
+    params = _params(_torch_model())
+    batch = _batch(seed=8)
+    latents, noise, sigmas, context, mask, weighting = (jnp.asarray(x) for x in batch)
+
+    def loss_for(chunk):
+        noisy = losses.noisy_model_input(latents, noise, sigmas)
+        prediction = jm.forward(
+            params, noisy, sigmas * 1000, context, mask, CFG, remat=True, query_chunk_size=chunk
+        )
+        return losses.rectified_flow_loss(prediction, latents, noise, sigmas, weighting)
+
+    full = float(loss_for(None))
+    chunked = float(loss_for(2))
+    np.testing.assert_allclose(full, chunked, rtol=1e-5, atol=1e-6)

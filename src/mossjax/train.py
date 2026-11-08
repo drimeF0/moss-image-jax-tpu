@@ -34,6 +34,19 @@ def _flush_print(message):
     print(message, flush=True)
 
 
+def device_memory_line():
+    try:
+        stats = jax.local_devices()[0].memory_stats()
+    except Exception:
+        return ""
+    if not stats or "bytes_in_use" not in stats:
+        return ""
+    used = stats["bytes_in_use"] / 1e9
+    limit = stats.get("bytes_limit", 0) / 1e9
+    peak = stats.get("peak_bytes_in_use", stats["bytes_in_use"]) / 1e9
+    return f", mem {used:.1f}/{limit:.1f} GB (peak {peak:.1f})"
+
+
 def train_loop(
     params,
     cfg: MossConfig,
@@ -83,7 +96,10 @@ def train_loop(
         grad_norm = float(metrics["grad_norm"])
         history.append(loss)
         if loop_config.log_every and step % loop_config.log_every == 0:
-            log_fn(f"steps: {step}, loss/current: {loss:.6f}, loss/average: {np.mean(history[-50:]):.6f}, grad_norm: {grad_norm:.4f}")
+            log_fn(
+                f"steps: {step}, loss/current: {loss:.6f}, loss/average: {np.mean(history[-50:]):.6f}, "
+                f"grad_norm: {grad_norm:.4f}{device_memory_line()}"
+            )
         if output_dir is not None and loop_config.save_every and step % loop_config.save_every == 0:
             lora_mod.save_lora_file(
                 os.path.join(output_dir, f"lora_step{step:07d}.safetensors"),
