@@ -1,3 +1,4 @@
+import jax
 import numpy as np
 import jax.numpy as jnp
 import torch
@@ -121,6 +122,25 @@ def test_e2e_cache_train_export(tmp_path):
     network.apply_to([], model)
     info = network.load_state_dict(weights_sd, strict=True)
     assert not info.missing_keys and not info.unexpected_keys
+    resumed = lora.load_lora_file(str(final_path), dit_params, DIT)
+    resumed_dir = tmp_path / "out_resumed"
+    _, resumed_history = train_mod.train_loop(
+        dit_params,
+        DIT,
+        records,
+        trainer.TrainConfig(rank=2, learning_rate=5e-2, remat=True),
+        train_mod.LoopConfig(steps=2, seed=9, timestep_sampling="uniform", log_every=0),
+        bucket_reso=BUCKET,
+        output_dir=str(resumed_dir),
+        vae_stats=vae_stats,
+        log_fn=lambda *_: None,
+        initial_lora=resumed,
+    )
+    assert all(np.isfinite(resumed_history))
+    resumed_after = lora.load_lora_file(str(resumed_dir / "moss_lora_final.safetensors"), dit_params, DIT)
+    before, after = jax.tree.leaves(resumed), jax.tree.leaves(resumed_after)
+    assert any(not np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(before, after))
+
     with torch.no_grad():
         x = torch.randn(1, DIT_CONFIG["latent_channels"], 2, 2)
         context = torch.randn(1, 16, DIT_CONFIG["text_dim"])

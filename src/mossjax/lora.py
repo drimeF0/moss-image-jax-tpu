@@ -135,6 +135,19 @@ def import_lora(sd: Dict[str, np.ndarray], params, cfg: MossConfig, dtype=jnp.fl
     return {"layers": layers}
 
 
+def lora_rank_alpha(lora_tree, default_rank: int = 4, default_alpha=None):
+    try:
+        leaf = lora_tree["layers"][0]["proj"]["q"]
+        rank = int(leaf["A"].shape[0])
+        scale = float(np.asarray(leaf["scale"]))
+        alpha = scale * rank
+        if alpha <= 0:
+            raise ValueError("non-positive alpha")
+        return rank, alpha
+    except Exception:
+        return default_rank, (default_alpha if default_alpha is not None else float(default_rank))
+
+
 def merge_into_params(params, lora, cfg: MossConfig, dtype=None):
     flat = weights_mod.flatten_tree(params)
     for index, block in enumerate(lora["layers"]):

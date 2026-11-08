@@ -57,12 +57,19 @@ def train_loop(
     output_dir=None,
     vae_stats=None,
     log_fn=_flush_print,
+    initial_lora=None,
 ):
     dataset = CachedDataset(records, bucket_reso, seed=loop_config.seed + 1, vae_stats=vae_stats)
-    state, optimizer = trainer.init_train_state(params, cfg, train_config, jax.random.PRNGKey(loop_config.seed))
+    state, optimizer = trainer.init_train_state(
+        params, cfg, train_config, jax.random.PRNGKey(loop_config.seed), initial_lora=initial_lora
+    )
     step_fn = trainer.make_train_step(cfg, train_config, optimizer)
     rng = np.random.default_rng(loop_config.seed)
-    alpha = train_config.alpha if train_config.alpha is not None else float(train_config.rank)
+    checkpoint_dim = train_config.rank
+    checkpoint_alpha = train_config.alpha if train_config.alpha is not None else float(train_config.rank)
+    if initial_lora is not None:
+        checkpoint_dim, checkpoint_alpha = lora_mod.lora_rank_alpha(initial_lora, checkpoint_dim, checkpoint_alpha)
+        log_fn(f"[train] resuming from an existing LoRA: dim {checkpoint_dim}, alpha {checkpoint_alpha:g}")
     if output_dir is not None:
         os.makedirs(output_dir, exist_ok=True)
 
@@ -113,8 +120,8 @@ def train_loop(
                 os.path.join(output_dir, f"lora_step{step:07d}.safetensors"),
                 state["lora"],
                 cfg,
-                dim=train_config.rank,
-                alpha=alpha,
+                dim=checkpoint_dim,
+                alpha=checkpoint_alpha,
                 metadata={"ss_steps": step, **loop_config.checkpoint_metadata},
             )
 
@@ -123,8 +130,8 @@ def train_loop(
             os.path.join(output_dir, "moss_lora_final.safetensors"),
             state["lora"],
             cfg,
-            dim=train_config.rank,
-            alpha=alpha,
+            dim=checkpoint_dim,
+            alpha=checkpoint_alpha,
             metadata={"ss_steps": loop_config.steps, **loop_config.checkpoint_metadata},
         )
     return state, history

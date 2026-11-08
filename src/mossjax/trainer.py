@@ -61,10 +61,13 @@ def make_optimizer(train_config: TrainConfig):
     return optax.chain(optax.clip_by_global_norm(train_config.max_grad_norm), inner)
 
 
-def init_train_state(params, cfg: MossConfig, train_config: TrainConfig, rng):
-    lora_params = lora_mod.init_lora(
-        params, cfg, rank=train_config.rank, alpha=train_config.alpha, rng=rng, dtype=jnp.float32
-    )
+def init_train_state(params, cfg: MossConfig, train_config: TrainConfig, rng, initial_lora=None):
+    if initial_lora is not None:
+        lora_params = initial_lora
+    else:
+        lora_params = lora_mod.init_lora(
+            params, cfg, rank=train_config.rank, alpha=train_config.alpha, rng=rng, dtype=jnp.float32
+        )
     optimizer = make_optimizer(train_config)
     state = {
         "lora": lora_params,

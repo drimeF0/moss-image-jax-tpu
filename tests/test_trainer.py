@@ -235,3 +235,20 @@ def test_query_chunking_preserves_loss():
     full = float(loss_for(None))
     chunked = float(loss_for(2))
     np.testing.assert_allclose(full, chunked, rtol=1e-5, atol=1e-6)
+
+
+def test_init_train_state_with_initial_lora():
+    from mossjax import lora
+
+    params = _params(_torch_model())
+    tree = lora.init_lora(params, CFG, rank=2, alpha=2.0, rng=jax.random.PRNGKey(0))
+    state, _ = trainer.init_train_state(
+        params, CFG, trainer.TrainConfig(rank=4), jax.random.PRNGKey(1), initial_lora=tree
+    )
+    for a, b in zip(jax.tree.leaves(tree), jax.tree.leaves(state["lora"])):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+
+    rank, alpha = lora.lora_rank_alpha(tree)
+    assert rank == 2 and abs(alpha - 2.0) < 1e-6
+    rank, alpha = lora.lora_rank_alpha({}, default_rank=5, default_alpha=7.0)
+    assert rank == 5 and alpha == 7.0

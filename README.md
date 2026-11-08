@@ -42,7 +42,7 @@ python scripts/colab_run.py --mode full --dit ..._dit_int8.safetensors \
 обычное чтение, без квантования на каждом запуске).
 
 Отдельные стадии: `scripts/make_caches.py`, `scripts/train.py`
-(AdamW/Adafactor, `--dataset-config dataset.toml`), `scripts/sample.py`.
+(AdamW/Adafactor, `--dataset-config dataset.toml`, `--resume-lora`), `scripts/sample.py`.
 
 Интерактивный режим (Gradio): `scripts/gradio_app.py` — DiT (+LoRA) держится в
 памяти между промптами, `--low-mem` перезагружает TE на каждый промпт (для

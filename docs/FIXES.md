@@ -249,3 +249,13 @@ N = H/16·W/16; последовательность `[image, text]`; image-upst
   (умножается только `scale`-лист, A/B не трогаются).
 - Скрипт: `scripts/gradio_app.py` (`--share` для Colab, один TPU-процесс);
   notebook: секция «3. Интерактивный режим».
+
+### FIXES #24. Дотренировка с готового LoRA (--resume-lora)
+- `train_loop(initial_lora=...)` / `init_train_state(initial_lora=...)`: вместо
+  случайной инициализации берётся дерево из `lora.load_lora_file(...)`.
+- `lora.lora_rank_alpha(tree)` определяет dim/alpha из файла — чекпойнты
+  сохраняются с исходными rank/alpha, даже если `--rank` в CLI другой
+  (в лог печатается `[train] resuming ... dim N, alpha A`).
+- Оптимизатор стартует заново (AdamW/Adafactor моменты не восстанавливаются) —
+  это ожидаемое поведение, для полного resume нужен orbax-стейт (TODO).
+- CLI: `--resume-lora PATH` в `scripts/train.py` и `scripts/colab_run.py`.

@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument("--timestep-sampling", default="truncated_logit_normal")
     parser.add_argument("--query-chunk", type=int, default=0, help="attention query chunk for sampling (0 = auto)")
     parser.add_argument("--train-query-chunk", type=int, default=1024, help="attention query chunk during training (0 = disable)")
+    parser.add_argument("--resume-lora", default=None, help="continue training from an existing LoRA safetensors")
     return parser.parse_args()
 
 
@@ -258,6 +259,10 @@ def run_full(args, output_dir, summary):
     loop_config = train_mod.LoopConfig(
         steps=steps, seed=args.seed, timestep_sampling=args.timestep_sampling, save_every=100
     )
+    initial_lora = None
+    if args.resume_lora:
+        initial_lora = lora_mod.load_lora_file(args.resume_lora, dit_params, MOSS_IMAGE_CONFIG)
+        print(f"[stage] train: resuming from {args.resume_lora}", flush=True)
     state, history = train_mod.train_loop(
         dit_params,
         MOSS_IMAGE_CONFIG,
@@ -267,6 +272,7 @@ def run_full(args, output_dir, summary):
         bucket_reso=(args.width, args.height),
         output_dir=os.path.join(output_dir, "checkpoints"),
         vae_stats=vae_stats_from(vae_params),
+        initial_lora=initial_lora,
     )
     summary["training"] = {"steps": steps, "first_loss": history[0], "last_loss": history[-1]}
 

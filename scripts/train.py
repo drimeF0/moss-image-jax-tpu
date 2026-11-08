@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import numpy as np
 
-from mossjax import quant, train as train_mod, trainer
+from mossjax import lora as lora_mod, quant, train as train_mod, trainer
 from mossjax import vae as vae_mod
 from mossjax import weights
 from mossjax.config import MOSS_IMAGE_CONFIG
@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument("--adafactor-min-dim-size-to-factor", type=int, default=128)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--save-every", type=int, default=500)
+    parser.add_argument("--resume-lora", default=None, help="continue training from an existing LoRA safetensors (optimizer state starts fresh)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--timestep-sampling", default="truncated_logit_normal")
     parser.add_argument("--discrete-flow-shift", type=float, default=1.0)
@@ -132,6 +133,9 @@ def main():
         timestep_uniform_ratio=args.timestep_uniform_ratio,
         save_every=args.save_every,
     )
+    initial_lora = None
+    if args.resume_lora:
+        initial_lora = lora_mod.load_lora_file(args.resume_lora, params, MOSS_IMAGE_CONFIG)
     train_mod.train_loop(
         params,
         MOSS_IMAGE_CONFIG,
@@ -141,6 +145,7 @@ def main():
         bucket_reso=(args.bucket_width, args.bucket_height),
         output_dir=args.output_dir,
         vae_stats=vae_stats,
+        initial_lora=initial_lora,
     )
 
 
