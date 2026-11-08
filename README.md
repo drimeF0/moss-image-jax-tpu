@@ -44,6 +44,10 @@ python scripts/colab_run.py --mode full --dit ..._dit_int8.safetensors \
 Отдельные стадии: `scripts/make_caches.py`, `scripts/train.py`
 (AdamW/Adafactor, `--dataset-config dataset.toml`), `scripts/sample.py`.
 
+Интерактивный режим (Gradio): `scripts/gradio_app.py` — DiT (+LoRA) держится в
+памяти между промптами, `--low-mem` перезагружает TE на каждый промпт (для
+1024px на 16 ГБ), `--share` даёт публичную ссылку в Colab.
+
 ## Тесты
 
 ```bash

@@ -18,6 +18,7 @@ dependencies = [
 convert = ["torch>=2.4"]
 test = ["pytest>=8", "torch>=2.4", "transformers>=5.12", "diffusers>=0.42"]
 train = ["flax>=0.10", "optax>=0.2", "orbax-checkpoint>=0.6"]
+interactive = ["gradio>=4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
